@@ -1,0 +1,76 @@
+{
+  "duration_s": 89.988,
+  "format": "mcap",
+  "in_progress": false,
+  "message_count": 18897,
+  "partial": false,
+  "path": "<volatile>",
+  "provenance": {
+    "method": "metadata_index",
+    "mission_id": "<volatile>",
+    "partial": false,
+    "path": "<volatile>",
+    "sample_count": 18897,
+    "time_range": [
+      0.0,
+      89.988
+    ],
+    "topics": [
+      "/camera/image_raw",
+      "/cmd_vel",
+      "/imu/data",
+      "/odom",
+      "/scan"
+    ],
+    "warnings": []
+  },
+  "size_bytes": "<volatile>",
+  "topics": [
+    {
+      "count": 2700,
+      "declared_hz": null,
+      "first_s": 0.0,
+      "hz": 30.004,
+      "last_s": 89.988,
+      "msg_type": "sensor_msgs/msg/CompressedImage",
+      "topic": "/camera/image_raw"
+    },
+    {
+      "count": 1799,
+      "declared_hz": null,
+      "first_s": 0.0,
+      "hz": 19.991,
+      "last_s": 89.988,
+      "msg_type": "geometry_msgs/msg/Twist",
+      "topic": "/cmd_vel"
+    },
+    {
+      "count": 9000,
+      "declared_hz": 100.0,
+      "first_s": 0.0,
+      "hz": 100.013,
+      "last_s": 89.988,
+      "msg_type": "sensor_msgs/msg/Imu",
+      "topic": "/imu/data"
+    },
+    {
+      "count": 4499,
+      "declared_hz": null,
+      "first_s": 0.0,
+      "hz": 49.995,
+      "last_s": 89.988,
+      "msg_type": "nav_msgs/msg/Odometry",
+      "topic": "/odom"
+    },
+    {
+      "count": 899,
+      "declared_hz": null,
+      "first_s": 0.0,
+      "hz": 9.99,
+      "last_s": 89.988,
+      "msg_type": "sensor_msgs/msg/LaserScan",
+      "topic": "/scan"
+    }
+  ],
+  "warnings": []
+}

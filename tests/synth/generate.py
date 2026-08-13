@@ -41,6 +41,10 @@ class TopicSpec:
     #: declared QoS deadline in seconds, written into channel metadata
     deadline_s: float | None = None
     jitter_cv: float = 0.02
+    #: 1 = RELIABLE, 2 = BEST_EFFORT (the profile that permits silent drops)
+    reliability: int = 1
+    #: KEEP_LAST queue depth; a shallow queue on a fast topic discards under load
+    depth: int = 10
 
 
 DEFAULT_TOPICS: tuple[TopicSpec, ...] = (
@@ -52,6 +56,17 @@ DEFAULT_TOPICS: tuple[TopicSpec, ...] = (
     TopicSpec("/cmd_vel", "geometry_msgs/msg/Twist", 20.0),
     TopicSpec("/diagnostics", "diagnostic_msgs/msg/DiagnosticArray", 1.0),
     TopicSpec("/rosout", "rcl_interfaces/msg/Log", 2.0),
+)
+
+#: profiles that permit silent loss: BEST_EFFORT on a fast sensor, a depth-1 queue on a
+#: fast one, and a deadline the publisher does not honour
+LOSSY_QOS_TOPICS: tuple[TopicSpec, ...] = (
+    TopicSpec("/imu/data", "sensor_msgs/msg/Imu", 100.0, deadline_s=0.01, reliability=2),
+    TopicSpec("/scan", "sensor_msgs/msg/LaserScan", 10.0, depth=1),
+    TopicSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 30.0, depth=2,
+              reliability=2),
+    TopicSpec("/odom", "nav_msgs/msg/Odometry", 50.0, deadline_s=1.0),
+    TopicSpec("/cmd_vel", "geometry_msgs/msg/Twist", 20.0),
 )
 
 #: the sensor set that exercises the paths a camera-and-lidar robot actually uses:
@@ -461,13 +476,13 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
     return {"data": float(i)}
 
 
-def _qos_yaml(deadline_s: float | None) -> str:
-    if deadline_s is None:
+def _qos_yaml(deadline_s: float | None, reliability: int = 1, depth: int = 10) -> str:
+    if deadline_s is None and reliability == 1 and depth == 10:
         return ""
-    sec = int(deadline_s)
-    nsec = int((deadline_s - sec) * 1e9)
+    sec = int(deadline_s or 0)
+    nsec = int(((deadline_s or 0) - sec) * 1e9)
     return (
-        "- history: 1\n  depth: 10\n  reliability: 1\n  durability: 2\n"
+        f"- history: 1\n  depth: {depth}\n  reliability: {reliability}\n  durability: 2\n"
         f"  deadline:\n    sec: {sec}\n    nsec: {nsec}\n"
         "  lifespan:\n    sec: 0\n    nsec: 0\n"
         "  liveliness: 1\n  liveliness_lease_duration:\n    sec: 0\n    nsec: 0\n"
@@ -517,7 +532,7 @@ def generate_bag(
                 )
                 encoders[spec.msg_type] = serialize_dynamic(spec.msg_type, msgdef)[spec.msg_type]
             meta = {}
-            qos = _qos_yaml(spec.deadline_s)
+            qos = _qos_yaml(spec.deadline_s, spec.reliability, spec.depth)
             if qos:
                 meta["offered_qos_profiles"] = qos
             channel_ids[spec.topic] = writer.register_channel(

@@ -1,0 +1,86 @@
+{
+  "bin_s": 5.0,
+  "continuation_token": "<volatile>",
+  "field_path": "range_max",
+  "gaps": [
+    [
+      40.083,
+      45.083
+    ]
+  ],
+  "original_size": null,
+  "provenance": {
+    "method": "resample(bin_s=5.0)",
+    "mission_id": "<volatile>",
+    "partial": false,
+    "path": "<volatile>",
+    "sample_count": 819,
+    "time_range": [
+      0.0,
+      89.995
+    ],
+    "topics": [
+      "/scan"
+    ],
+    "warnings": [
+      "values are binned means; gaps are not interpolated"
+    ]
+  },
+  "stats": {
+    "count": 819.0,
+    "max": 30.0,
+    "mean": 30.0,
+    "min": 30.0,
+    "p1": 30.0,
+    "p25": 30.0,
+    "p5": 30.0,
+    "p50": 30.0,
+    "p75": 30.0,
+    "p95": 30.0,
+    "p99": 30.0,
+    "std": 0.0
+  },
+  "suggested_narrowing": null,
+  "t": [
+    2.583,
+    7.583,
+    12.583,
+    17.583,
+    22.583,
+    27.583,
+    32.583,
+    37.583,
+    42.583,
+    47.583,
+    52.583,
+    57.583,
+    62.583,
+    67.583,
+    72.583,
+    77.583,
+    82.583,
+    87.583
+  ],
+  "topic": "/scan",
+  "truncated": false,
+  "values": [
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    null,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0,
+    30.0
+  ]
+}

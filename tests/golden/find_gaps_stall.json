@@ -1,0 +1,97 @@
+{
+  "continuation_token": "<volatile>",
+  "gaps": [
+    {
+      "classification": "system_wide_stall",
+      "co_silent_topics": [
+        "/camera/image_raw",
+        "/imu/data",
+        "/odom"
+      ],
+      "concurrency": 0.75,
+      "duration_s": 6.104,
+      "estimated_lost": 60,
+      "expected_period_s": 0.1,
+      "periods_missed": 61.0,
+      "severity": 2,
+      "t_end": 46.07,
+      "t_start": 39.966,
+      "topic": "/scan"
+    },
+    {
+      "classification": "system_wide_stall",
+      "co_silent_topics": [
+        "/imu/data",
+        "/odom",
+        "/scan"
+      ],
+      "concurrency": 0.75,
+      "duration_s": 6.041,
+      "estimated_lost": 181,
+      "expected_period_s": 0.033,
+      "periods_missed": 182.1,
+      "severity": 3,
+      "t_end": 46.03,
+      "t_start": 39.989,
+      "topic": "/camera/image_raw"
+    },
+    {
+      "classification": "subsystem_failure",
+      "co_silent_topics": [
+        "/imu/data",
+        "/scan"
+      ],
+      "concurrency": 0.5,
+      "duration_s": 6.025,
+      "estimated_lost": 300,
+      "expected_period_s": 0.02,
+      "periods_missed": 300.7,
+      "severity": 3,
+      "t_end": 46.014,
+      "t_start": 39.989,
+      "topic": "/odom"
+    },
+    {
+      "classification": "system_wide_stall",
+      "co_silent_topics": [
+        "/camera/image_raw",
+        "/odom",
+        "/scan"
+      ],
+      "concurrency": 0.75,
+      "duration_s": 6.01,
+      "estimated_lost": 600,
+      "expected_period_s": 0.01,
+      "periods_missed": 600.9,
+      "severity": 3,
+      "t_end": 46.005,
+      "t_start": 39.995,
+      "topic": "/imu/data"
+    }
+  ],
+  "offset": 0,
+  "provenance": {
+    "method": "single_pass_auditor(cadence,clock,correlation,dropped,file_integrity,gap,jitter,rate_degradation)",
+    "mission_id": "<volatile>",
+    "partial": false,
+    "path": "<volatile>",
+    "sample_count": 17758,
+    "time_range": [
+      0.0,
+      89.999
+    ],
+    "topics": [
+      "/camera/image_raw",
+      "/cmd_vel",
+      "/imu/data",
+      "/odom",
+      "/scan"
+    ],
+    "warnings": [
+      "this format records a single timestamp per message \u2014 recorder lag (D6b) is not measurable and the lag curve is flat by construction, not by health"
+    ]
+  },
+  "suggested_narrowing": null,
+  "total_gaps": 4,
+  "truncated": false
+}

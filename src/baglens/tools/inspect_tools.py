@@ -13,7 +13,7 @@ from ..kernels.timeseries import describe
 from ..provenance import Provenance, mission_id_for
 from ..readers import open_bag
 from ..readers.base import dotted_get
-from .common import resolve
+from .common import is_redacted_field, mask_payload, resolve
 
 
 class TopicSummary(BaseModel):
@@ -175,7 +175,11 @@ def register(mcp: Any) -> None:
         reader.close()
         return SampleSet(
             samples=[
-                MessageSample(topic=tp, t=round((ts - t0) / 1e9, 4), data=_to_dict(msg))
+                MessageSample(
+                    topic=tp,
+                    t=round((ts - t0) / 1e9, 4),
+                    data=mask_payload(tp, _to_dict(msg)),
+                )
                 for tp, ts, msg in chosen
             ],
             requested=count,
@@ -212,7 +216,12 @@ def register(mcp: Any) -> None:
             if best is None or abs(rel - t) < abs(best[0] - t):
                 best = (rel, msg)
         reader.close()
-        samples = [MessageSample(topic=topic, t=round(best[0], 4), data=_to_dict(best[1]))] if best else []
+        samples = (
+            [MessageSample(topic=topic, t=round(best[0], 4),
+                           data=mask_payload(topic, _to_dict(best[1])))]
+            if best
+            else []
+        )
         return SampleSet(
             samples=samples,
             requested=1,
@@ -237,6 +246,18 @@ def register(mcp: Any) -> None:
         over sampling messages when you only need the distribution.
         """
         p = resolve(path)
+        if is_redacted_field(topic, field_path):
+            return FieldStats(
+                topic=topic,
+                field_path=field_path,
+                provenance=Provenance(
+                    path=str(p), topics=[topic], method="redacted",
+                    warnings=[
+                        f"{topic}.{field_path} is redacted by configuration; no values "
+                        "were read and none can be returned"
+                    ],
+                ),
+            )
         reader = open_bag(p)
         values: list[float] = []
         for _tp, _ts, msg in reader.messages([topic], start_s, end_s):

@@ -1,0 +1,34 @@
+{
+  "field_path": "twist.twist.linear.x",
+  "gaps_in_range": 0,
+  "provenance": {
+    "method": "field_stats(twist.twist.linear.x)",
+    "mission_id": "<volatile>",
+    "partial": false,
+    "path": "<volatile>",
+    "sample_count": 4499,
+    "time_range": [
+      0.0,
+      89.988
+    ],
+    "topics": [
+      "/odom"
+    ],
+    "warnings": []
+  },
+  "stats": {
+    "count": 4499.0,
+    "max": 0.534,
+    "mean": 0.5,
+    "min": 0.463,
+    "p1": 0.478,
+    "p25": 0.493,
+    "p5": 0.484,
+    "p50": 0.5,
+    "p75": 0.507,
+    "p95": 0.516,
+    "p99": 0.523,
+    "std": 0.01
+  },
+  "topic": "/odom"
+}

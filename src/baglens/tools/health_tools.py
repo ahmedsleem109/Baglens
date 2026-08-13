@@ -25,6 +25,35 @@ from ..provenance import Provenance
 from .common import audit, find_finding, resolve
 
 
+class TopicQos(BaseModel):
+    topic: str
+    msg_type: str = ""
+    observed_hz: float = 0.0
+    declared_hz: float | None = None
+    reliability: str = "unknown"
+    durability: str = "unknown"
+    history: str = "unknown"
+    depth: int = 0
+    deadline_s: float | None = None
+    recorded: bool = True
+
+
+class QosIssueModel(BaseModel):
+    topic: str
+    kind: str
+    severity: str
+    detail: str
+    recommendation: str
+
+
+class QosReport(BaseModel):
+    topics: list[TopicQos] = Field(default_factory=list)
+    issues: list[QosIssueModel] = Field(default_factory=list)
+    topics_without_qos: list[str] = Field(default_factory=list)
+    verdict: str = ""
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
 class GapList(BaseModel):
     gaps: list[GapDetail] = Field(default_factory=list)
     total_gaps: int = 0
@@ -155,6 +184,91 @@ def register(mcp: Any) -> None:
                 f"min_duration_s or topic= to narrow, or continuation_token to page on."
             )
         return out
+
+    @mcp.tool(name="health.qos_report")
+    def qos_report(path: str) -> QosReport:
+        """The recorded QoS profile per topic, and the profiles that cause silent drops.
+
+        QoS is where data loss is *configured*: BEST_EFFORT permits the middleware to
+        drop under load, a shallow KEEP_LAST queue discards as soon as a subscriber
+        stalls, and a declared deadline nobody honours makes every downstream timeout
+        wrong. None of that shows up in a message count.
+
+        Call this when messages are missing and the gaps look diffuse — it distinguishes
+        "the sensor failed" from "this topic was configured to be lossy".
+        """
+        from ..kernels.qos import check_profile, parse_qos
+
+        report, auditor = audit(path)
+        meta = auditor.meta
+        rows: list[TopicQos] = []
+        issues: list[QosIssueModel] = []
+        missing: list[str] = []
+        health_by_topic = {t.topic: t for t in report.topics}
+
+        for info in meta.topics:
+            health = health_by_topic.get(info.topic)
+            observed = health.observed_hz if health else 0.0
+            drop_rate = 0.0
+            if health and health.count:
+                drop_rate = health.estimated_dropped / max(
+                    health.count + health.estimated_dropped, 1
+                )
+            profile = parse_qos(info.qos)
+            if profile is None:
+                missing.append(info.topic)
+                rows.append(
+                    TopicQos(topic=info.topic, msg_type=info.msg_type,
+                             observed_hz=round(observed, 3), recorded=False)
+                )
+                continue
+            rows.append(
+                TopicQos(
+                    topic=info.topic,
+                    msg_type=info.msg_type,
+                    observed_hz=round(observed, 3),
+                    declared_hz=round(profile.declared_hz, 3) if profile.declared_hz else None,
+                    reliability=profile.reliability,
+                    durability=profile.durability,
+                    history=profile.history,
+                    depth=profile.depth,
+                    deadline_s=profile.deadline_s,
+                )
+            )
+            issues += [
+                QosIssueModel(**issue.__dict__)
+                for issue in check_profile(info.topic, profile, observed, drop_rate)
+            ]
+
+        issues.sort(key=lambda i: {"high": 0, "medium": 1, "low": 2}.get(i.severity, 3))
+        if missing and len(missing) == len(meta.topics):
+            verdict = (
+                "this recording carries no QoS profiles at all — either the format does "
+                "not store them or the recorder did not write them, so nothing here can "
+                "be checked"
+            )
+        elif not issues:
+            verdict = "no QoS profile in this recording is likely to cause silent loss"
+        else:
+            verdict = (
+                f"{len(issues)} QoS finding(s); the highest concern is "
+                f"{issues[0].kind} on {issues[0].topic}"
+            )
+
+        return QosReport(
+            topics=rows,
+            issues=issues,
+            topics_without_qos=missing,
+            verdict=verdict,
+            provenance=Provenance(
+                path=str(resolve(path)),
+                mission_id=report.mission_id,
+                topics=[t.topic for t in meta.topics],
+                time_range=(0.0, report.duration_s),
+                method="qos_profile_check",
+                sample_count=len(meta.topics),
+            ),
+        )
 
     @mcp.tool(name="health.clock_report")
     def clock_report(path: str) -> ClockReport:

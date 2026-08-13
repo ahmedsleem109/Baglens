@@ -25,7 +25,7 @@ from ..models import Budgeted
 from ..provenance import Provenance, mission_id_for
 from ..readers import open_bag
 from ..readers.base import BagMetadata
-from .common import resolve
+from .common import is_redacted_field, resolve
 
 
 class SeriesResult(Budgeted):
@@ -99,6 +99,11 @@ def _extract(
     p = resolve(path)
     reader = open_bag(p)
     meta = reader.metadata()
+    if is_redacted_field(topic, field_path):
+        # refuse at the boundary rather than reading and then dropping: the point of a
+        # redaction rule is that the values never enter the process at all
+        reader.close()
+        return p, meta, np.asarray([]), np.asarray([])
     t0 = meta.start_time_ns
     ts: list[float] = []
     vs: list[float] = []

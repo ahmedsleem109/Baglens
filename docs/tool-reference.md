@@ -1,6 +1,6 @@
 # Tool reference
 
-`baglens` 0.2.0 — **42 tools** across 10 namespaces.
+`baglens` 0.2.0 — **43 tools** across 10 namespaces.
 
 Every tool returns a typed Pydantic model. Every result that reports on data
 carries a `provenance` object naming the recording, the topics, the time range and
@@ -56,6 +56,9 @@ List indexed missions with filters. Paginated.
 Filter by robot, tag, presence of a topic, duration, health score or verdict.
 Use `max_health_score` to find the recordings worth investigating first.
 
+If a previous call came back truncated, pass its `continuation_token` back here
+to get the next page; it carries the offset and page size.
+
 | parameter | type | required | default |
 |---|---|---|---|
 | `robot_id` | union | no | `null` |
@@ -66,6 +69,7 @@ Use `max_health_score` to find the recordings worth investigating first.
 | `verdict` | union | no | `null` |
 | `limit` | integer | no | `50` |
 | `offset` | integer | no | `0` |
+| `continuation_token` | union | no | `null` |
 
 ### `catalog.mission_info`
 
@@ -145,8 +149,11 @@ Diff two missions signal by signal, ranked by effect size.
 
 `align` matters: "progress" normalises each mission to 0–1 of its own duration
 (the right default when runs differ in length), "absolute" compares raw seconds,
-"event" aligns on the first motion command. Returns effect sizes and the
-most-changed list, never raw data.
+and "event" anchors each mission on the first instant it actually moved — use
+that when runs idle for different lengths before starting, since otherwise every
+later difference is an artefact of the offset. The anchor instants are reported.
+
+Returns effect sizes and the most-changed list, never raw data.
 
 | parameter | type | required | default |
 |---|---|---|---|
@@ -155,6 +162,7 @@ most-changed list, never raw data.
 | `align` | string | no | `"progress"` |
 | `signals` | union | no | `null` |
 | `top_k` | integer | no | `10` |
+| `anchor_signal` | union | no | `null` |
 
 ### `compare.rank_missions`
 
@@ -341,12 +349,32 @@ system_wide_stall (recorder, disk, CPU or power), subsystem_failure (a shared
 driver or bus — read `co_silent_topics`, that list is the diagnosis), or
 isolated_topic (that sensor or node alone).
 
+Gaps come back longest first. If the result is truncated, pass its
+`continuation_token` back to walk further down the list.
+
 | parameter | type | required | default |
 |---|---|---|---|
 | `path` | string | yes | |
 | `topic` | union | no | `null` |
 | `min_duration_s` | number | no | `0.0` |
 | `sensitivity` | string | no | `"normal"` |
+| `continuation_token` | union | no | `null` |
+
+### `health.qos_report`
+
+The recorded QoS profile per topic, and the profiles that cause silent drops.
+
+QoS is where data loss is *configured*: BEST_EFFORT permits the middleware to
+drop under load, a shallow KEEP_LAST queue discards as soon as a subscriber
+stalls, and a declared deadline nobody honours makes every downstream timeout
+wrong. None of that shows up in a message count.
+
+Call this when messages are missing and the gaps look diffuse — it distinguishes
+"the sensor failed" from "this topic was configured to be lossy".
+
+| parameter | type | required | default |
+|---|---|---|---|
+| `path` | string | yes | |
 
 ### `health.topic_timeline`
 
@@ -482,6 +510,8 @@ Filtered `/rosout` lines by level, node, regex and time window.
 Prefer logs.cluster_patterns first: forty thousand lines become thirty patterns,
 and only then is it worth reading individual lines from the interesting one.
 
+Pass a previous result's `continuation_token` to read further down the match list.
+
 | parameter | type | required | default |
 |---|---|---|---|
 | `path` | string | yes | |
@@ -491,6 +521,7 @@ and only then is it worth reading individual lines from the interesting one.
 | `start_s` | union | no | `null` |
 | `end_s` | union | no | `null` |
 | `limit` | integer | no | `100` |
+| `continuation_token` | union | no | `null` |
 
 ### `logs.timeline`
 
