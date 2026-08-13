@@ -115,7 +115,8 @@ class Db3Reader:
             "SELECT t.name, t.type, m.timestamp, m.data FROM messages m "
             "JOIN topics t ON t.id = m.topic_id"
         )
-        clauses, params = [], []
+        clauses: list[str] = []
+        params: list[Any] = []
         if topics:
             clauses.append(f"t.name IN ({','.join('?' * len(topics))})")
             params += list(topics)

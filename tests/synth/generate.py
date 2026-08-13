@@ -54,6 +54,16 @@ DEFAULT_TOPICS: tuple[TopicSpec, ...] = (
     TopicSpec("/rosout", "rcl_interfaces/msg/Log", 2.0),
 )
 
+#: the sensor set that exercises the paths a camera-and-lidar robot actually uses:
+#: raw (uncompressed) images, a point cloud, and a planned path to deviate from
+SENSOR_TOPICS: tuple[TopicSpec, ...] = (
+    TopicSpec("/odom", "nav_msgs/msg/Odometry", 50.0),
+    TopicSpec("/plan", "nav_msgs/msg/Path", 1.0),
+    TopicSpec("/camera/image_raw", "sensor_msgs/msg/Image", 10.0),
+    TopicSpec("/points", "sensor_msgs/msg/PointCloud2", 10.0),
+    TopicSpec("/cmd_vel", "geometry_msgs/msg/Twist", 20.0),
+)
+
 SMALL_TOPICS: tuple[TopicSpec, ...] = (
     TopicSpec("/imu/data", "sensor_msgs/msg/Imu", 100.0, deadline_s=0.01),
     TopicSpec("/odom", "nav_msgs/msg/Odometry", 50.0),
@@ -121,6 +131,16 @@ def correlated_stall(topic_set: tuple[str, ...], t_start: float, duration: float
 
 def truncation(truncate_at_fraction: float) -> Fault:
     return Fault("truncation", params={"fraction": truncate_at_fraction}, detector="file_integrity")
+
+
+def crc_corruption(at_fraction: float = 0.5, length: int = 64) -> Fault:
+    """Flip a run of bytes inside the file, the way a bad disk or a bad cable does.
+
+    Distinct from truncation: the file is complete and the summary is intact, so the
+    damage only shows up when a chunk fails to decompress or its CRC does not match.
+    """
+    return Fault("crc_corruption", params={"fraction": at_fraction, "length": float(length)},
+                 detector="file_integrity")
 
 
 # ------------------------------------------------------------------ schedule build
@@ -339,6 +359,66 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
         }
     if msg_type == "sensor_msgs/msg/CompressedImage":
         return {"header": _header(t, "camera"), "format": "jpeg", "data": _tiny_jpeg()}
+    if msg_type == "sensor_msgs/msg/Image":
+        w = h = 16
+        # a moving bright band, so consecutive frames actually differ
+        band = int((t * 4) % h)
+        pixels = bytes(
+            (200 if row == band else 40) for row in range(h) for _ in range(w * 3)
+        )
+        return {
+            "header": _header(t, "camera"),
+            "height": h,
+            "width": w,
+            "encoding": "rgb8",
+            "is_bigendian": 0,
+            "step": w * 3,
+            "data": pixels,
+        }
+    if msg_type == "sensor_msgs/msg/PointCloud2":
+        n_points = 128
+        point_step = 12  # x, y, z as float32
+        import struct as _struct
+
+        blob = b"".join(
+            _struct.pack(
+                "<fff",
+                3.0 * math.cos(k / 20 + t),
+                3.0 * math.sin(k / 20 + t),
+                0.1 * ((k % 7) - 3),
+            )
+            for k in range(n_points)
+        )
+        return {
+            "header": _header(t, "lidar"),
+            "height": 1,
+            "width": n_points,
+            "fields": [
+                {"name": "x", "offset": 0, "datatype": 7, "count": 1},
+                {"name": "y", "offset": 4, "datatype": 7, "count": 1},
+                {"name": "z", "offset": 8, "datatype": 7, "count": 1},
+            ],
+            "is_bigendian": False,
+            "point_step": point_step,
+            "row_step": point_step * n_points,
+            "data": blob,
+            "is_dense": True,
+        }
+    if msg_type == "nav_msgs/msg/Path":
+        # a straight-line plan; /odom sines away from it, so deviation is measurable
+        return {
+            "header": _header(t, "map"),
+            "poses": [
+                {
+                    "header": _header(t, "map"),
+                    "pose": {
+                        "position": {"x": 0.5 * (t + k), "y": 0.0, "z": 0.0},
+                        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                    },
+                }
+                for k in range(10)
+            ],
+        }
     if msg_type == "tf2_msgs/msg/TFMessage":
         return {
             "transforms": [
@@ -481,7 +561,7 @@ def generate_bag(
         "clean": not faults,
     }
 
-    # truncation is a post-write byte operation, not a schedule one
+    # truncation and corruption are post-write byte operations, not schedule ones
     for f in faults:
         if f.kind == "truncation":
             raw = path.read_bytes()
@@ -489,10 +569,113 @@ def generate_bag(
             path.write_bytes(raw[:keep])
             truth["truncated_to_bytes"] = keep
             truth["original_bytes"] = len(raw)
+        elif f.kind == "crc_corruption":
+            raw = bytearray(path.read_bytes())
+            # Corrupt inside a chunk's compressed payload, not wherever the fraction
+            # happens to land: message-index records sit between chunks, and damaging
+            # one of those is invisible because nothing reads them on a sequential scan.
+            start = min(max(int(len(raw) * f.params["fraction"]), 1024), len(raw) - 1)
+            try:
+                from mcap.reader import make_reader
+
+                with path.open("rb") as fh:
+                    summary = make_reader(fh).get_summary()
+                chunks = list(summary.chunk_indexes) if summary else []
+                if chunks:
+                    idx = min(int(len(chunks) * f.params["fraction"]), len(chunks) - 1)
+                    chunk = chunks[idx]
+                    start = int(chunk.chunk_start_offset) + max(64, int(chunk.chunk_length) // 2)
+            except Exception:
+                pass
+            start = min(start, len(raw) - 1)
+            length = min(int(f.params["length"]), len(raw) - start)
+            for i in range(start, start + length):
+                raw[i] ^= 0xFF
+            path.write_bytes(bytes(raw))
+            truth["corrupted_at_byte"] = start
+            truth["corrupted_bytes"] = length
 
     gt = path.with_suffix(".ground_truth.json")
     gt.write_text(json.dumps(truth, indent=2))
     return truth
+
+
+def to_db3(src_mcap: str | Path, dst_dir: str | Path) -> Path:
+    """Convert a generated MCAP into a rosbag2 SQLite directory.
+
+    Conversion rather than a second writer: it keeps one source of truth for the
+    schedule, and it exercises the same file layout a real `ros2 bag record` produces,
+    metadata.yaml included.
+    """
+    from rosbags.convert import convert
+
+    dst = Path(dst_dir)
+    if dst.exists():
+        return next(dst.glob("*.db3"))
+    convert(srcs=[Path(src_mcap)], dst=dst, dst_storage="sqlite3", dst_version=8,
+            compress=None, compress_mode="none", default_typestore=None, typestore=None,
+            exclude_topics=[], include_topics=[], exclude_msgtypes=[], include_msgtypes=[])
+    return next(dst.glob("*.db3"))
+
+
+def to_bag1(src_mcap: str | Path, dst: str | Path) -> Path:
+    """Convert a generated MCAP into a ROS 1 `.bag`."""
+    from rosbags.convert import convert
+
+    target = Path(dst)
+    if target.exists():
+        return target
+    convert(srcs=[Path(src_mcap)], dst=target, dst_storage="", dst_version=0,
+            compress=None, compress_mode="none", default_typestore=None, typestore=None,
+            exclude_topics=[], include_topics=[], exclude_msgtypes=[], include_msgtypes=[])
+    return target
+
+
+def write_growing(path: str | Path, seed: int = 0, duration_s: float = 30.0,
+                  topics: tuple[TopicSpec, ...] = SMALL_TOPICS) -> Path:
+    """Write a bag and leave it *unfinished*: no summary, no trailing magic.
+
+    This is what a recording looks like while it is still being written, and what the
+    recovery path exists for. `Writer.finish()` is deliberately never called.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(seed)
+    schedules = _apply_faults(topics, duration_s, [], rng)
+
+    with p.open("wb") as f:
+        writer = Writer(f, compression=CompressionType.ZSTD, chunk_size=64 << 10)
+        writer.start(profile="ros2", library="baglens-synth")
+        schema_ids: dict[str, int] = {}
+        channel_ids: dict[str, int] = {}
+        encoders: dict[str, Any] = {}
+        for spec in topics:
+            msgdef = MSGDEFS[spec.msg_type]
+            if spec.msg_type not in schema_ids:
+                schema_ids[spec.msg_type] = writer.register_schema(
+                    spec.msg_type, "ros2msg", msgdef.encode())
+                encoders[spec.msg_type] = serialize_dynamic(spec.msg_type, msgdef)[spec.msg_type]
+            channel_ids[spec.topic] = writer.register_channel(
+                topic=spec.topic, message_encoding="cdr",
+                schema_id=schema_ids[spec.msg_type], metadata={})
+
+        type_of = {s.topic: s.msg_type for s in topics}
+        merged = sorted(
+            (log_t, pub_t, tp)
+            for tp, pairs in schedules.items()
+            for pub_t, log_t in pairs
+        )
+        for i, (log_t, pub_t, tp) in enumerate(merged):
+            writer.add_message(
+                channel_id=channel_ids[tp],
+                log_time=BASE_EPOCH_NS + int(log_t * 1e9),
+                publish_time=BASE_EPOCH_NS + int(pub_t * 1e9),
+                data=encoders[type_of[tp]](_payload(type_of[tp], pub_t, i, rng)),
+                sequence=i,
+            )
+        # no writer.finish(): the file stays open-ended, exactly as an interrupted
+        # recorder leaves it
+    return p
 
 
 # ------------------------------------------------------------------- fault matrix

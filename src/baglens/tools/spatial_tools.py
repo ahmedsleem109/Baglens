@@ -76,10 +76,29 @@ def _read_trajectory(path: Any, topic: str, field_prefix: str | None) -> tuple[T
     xs: list[float] = []
     ys: list[float] = []
     zs: list[float] = []
-    candidates = [tuple(f"{field_prefix}.{a}" for a in ("x", "y", "z"))] if field_prefix else POSE_PATHS
-    chosen: tuple[str, str, str] | None = None
+    candidates: tuple[tuple[str, ...], ...] = (
+        ((f"{field_prefix}.x", f"{field_prefix}.y", f"{field_prefix}.z"),)
+        if field_prefix
+        else POSE_PATHS
+    )
+    chosen: tuple[str, ...] | None = None
 
     for _tp, ts_ns, msg in reader.messages([topic]):
+        # nav_msgs/Path is a polyline inside one message, not a point per message.
+        # Treat the most recent one as the plan: that is what the robot was following.
+        poses = getattr(msg, "poses", None)
+        if isinstance(poses, (list, tuple)) and poses:
+            ts, xs, ys, zs = [], [], [], []
+            for i, stamped in enumerate(poses):
+                pose = getattr(stamped, "pose", stamped)
+                position = getattr(pose, "position", None)
+                if position is None:
+                    continue
+                ts.append((ts_ns - t0) / 1e9 + i * 1e-3)
+                xs.append(float(getattr(position, "x", 0.0)))
+                ys.append(float(getattr(position, "y", 0.0)))
+                zs.append(float(getattr(position, "z", 0.0)))
+            continue
         if chosen is None:
             for cand in candidates:
                 if dotted_get(msg, cand[0]) is not None:

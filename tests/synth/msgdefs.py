@@ -161,7 +161,61 @@ string key
 string value
 """
 
+IMAGE = f"""\
+std_msgs/Header header
+uint32 height
+uint32 width
+string encoding
+uint8 is_bigendian
+uint32 step
+uint8[] data
+{SEP}
+MSG: std_msgs/Header
+{HEADER}"""
+
+POINTCLOUD2 = f"""\
+std_msgs/Header header
+uint32 height
+uint32 width
+sensor_msgs/PointField[] fields
+bool is_bigendian
+uint32 point_step
+uint32 row_step
+uint8[] data
+bool is_dense
+{SEP}
+MSG: std_msgs/Header
+{HEADER}{SEP}
+MSG: sensor_msgs/PointField
+string name
+uint32 offset
+uint8 datatype
+uint32 count
+"""
+
+PATH = f"""\
+std_msgs/Header header
+geometry_msgs/PoseStamped[] poses
+{SEP}
+MSG: std_msgs/Header
+{HEADER}{SEP}
+MSG: geometry_msgs/PoseStamped
+std_msgs/Header header
+geometry_msgs/Pose pose
+{SEP}
+MSG: geometry_msgs/Pose
+geometry_msgs/Point position
+geometry_msgs/Quaternion orientation
+{SEP}
+MSG: geometry_msgs/Point
+{VECTOR3}{SEP}
+MSG: geometry_msgs/Quaternion
+{QUATERNION}"""
+
 MSGDEFS: dict[str, str] = {
+    "sensor_msgs/msg/Image": IMAGE,
+    "sensor_msgs/msg/PointCloud2": POINTCLOUD2,
+    "nav_msgs/msg/Path": PATH,
     "std_msgs/msg/Float64": FLOAT64,
     "geometry_msgs/msg/Twist": TWIST,
     "sensor_msgs/msg/Imu": IMU,

@@ -59,6 +59,28 @@ def overall_score(topics: list[TopicHealth], fscore: float, cfg: Config | None =
     return w.a_min * min(scores) + w.b_mean * (sum(scores) / len(scores)) + w.c_file * fscore
 
 
+def verdict_for(overall: float, fscore: float, cfg: Config | None = None) -> str:
+    """Map scores to a verdict, with file integrity acting as a ceiling rather than a term.
+
+    A corrupt file whose surviving half looks healthy would otherwise score well: the
+    detectors only ever saw the part that decodes, and that part is internally
+    consistent. Integrity is a precondition for trusting anything else, so it caps the
+    verdict instead of being averaged into it.
+    """
+    cfg = cfg or CONFIG
+    s = cfg.score
+    verdict = (
+        "trustworthy" if overall >= s.trustworthy
+        else "usable_with_caveats" if overall >= s.usable
+        else "compromised"
+    )
+    if fscore < s.usable:
+        return "compromised"
+    if fscore < s.trustworthy and verdict == "trustworthy":
+        return "usable_with_caveats"
+    return verdict
+
+
 def build_caveats(
     findings: list[Finding], topics: list[TopicHealth], fi: FileIntegrity | None
 ) -> list[str]:
@@ -114,5 +136,11 @@ def build_caveats(
         out.append(
             "The file is incomplete; absence of data after the last readable record is "
             "not evidence of absence of events."
+        )
+    if fi is not None and fi.unreadable_fraction > 0.01:
+        out.append(
+            f"{fi.unreadable_fraction * 100:.0f}% of the messages this file claims to "
+            "contain do not decode — the recording is corrupt, and every count, rate and "
+            "coverage figure below is computed only over what survived."
         )
     return out

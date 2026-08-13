@@ -55,7 +55,24 @@ ignore = ["E501", "B008"]
 
 [tool.mypy]
 python_version = "3.12"
+files = ["src/baglens"]
+mypy_path = "src"
+explicit_package_bases = true
+namespace_packages = true
 warn_unused_configs = true
+ignore_missing_imports = true
+# strict, minus the two that would only add noise: the MCP decorator surface is
+# untyped upstream, and Pydantic models carry their own runtime validation
+strict = true
+disallow_untyped_decorators = false
+warn_return_any = false
+
+# `mcap` ships an __init__.py but no py.typed, so mypy tries to analyse the
+# installed source and trips over "found twice under different module names".
+# Treat the untyped third-party readers as opaque; our wrappers are typed.
+[[tool.mypy.overrides]]
+module = ["mcap.*", "mcap_ros2.*", "rosbags.*", "pyulog.*", "plotly.*", "duckdb.*"]
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

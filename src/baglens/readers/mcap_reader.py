@@ -66,7 +66,7 @@ def _qos_period(channel_metadata: dict[str, str]) -> float | None:
             continue
         dl = prof.get("deadline")
         if isinstance(dl, dict):
-            sec = float(dl.get("sec", 0)) + float(dl.get("nsec", dl.get("nanosec", 0))) / 1e9
+            sec = float(dl.get("sec") or 0) + float(dl.get("nsec") or dl.get("nanosec") or 0) / 1e9
             # rmw uses a huge sentinel for "no deadline"
             if 0.0 < sec < 1e6:
                 return sec

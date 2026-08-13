@@ -180,13 +180,23 @@ def register(mcp: Any) -> None:
         verdict: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        continuation_token: str | None = None,
     ) -> MissionList:
         """List indexed missions with filters. Paginated.
 
         Filter by robot, tag, presence of a topic, duration, health score or verdict.
         Use `max_health_score` to find the recordings worth investigating first.
+
+        If a previous call came back truncated, pass its `continuation_token` back here
+        to get the next page; it carries the offset and page size.
         """
         cat = catalog()
+        if continuation_token:
+            from ..budget import read_continuation
+
+            page = read_continuation(continuation_token)
+            offset = int(page.get("offset", offset))
+            limit = int(page.get("limit", limit))
         where: list[str] = []
         params: list[Any] = []
         if robot_id:

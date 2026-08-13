@@ -77,7 +77,16 @@ class FileIntegrity(BaseModel):
     in_progress: bool = False  # file still growing
     has_summary: bool = True
     truncated_bytes: int = 0
+    #: what the index promises vs what actually decodes; the gap is corrupt data
+    messages_claimed: int = 0
+    messages_readable: int = 0
     chunk_issues: list[ChunkIssue] = Field(default_factory=list)
+
+    @property
+    def unreadable_fraction(self) -> float:
+        if not self.messages_claimed:
+            return 0.0
+        return max(0.0, 1.0 - self.messages_readable / self.messages_claimed)
     last_readable_time: float | None = None
     score: float = 100.0
     notes: list[str] = Field(default_factory=list)

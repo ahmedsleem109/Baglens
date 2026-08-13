@@ -78,6 +78,45 @@ def stall_bag(bagdir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def sensor_bag(bagdir: Path) -> Path:
+    """Raw images, a point cloud and a planned path — the paths the small set skips."""
+    p = bagdir / "sensors.mcap"
+    g.generate_bag(p, seed=21, duration_s=60.0, topics=g.SENSOR_TOPICS)
+    return p
+
+
+@pytest.fixture(scope="session")
+def rich_bag(bagdir: Path) -> Path:
+    """The full topic set: logs, tf, diagnostics, camera."""
+    p = bagdir / "rich.mcap"
+    g.generate_bag(p, seed=22, duration_s=60.0, topics=g.DEFAULT_TOPICS)
+    return p
+
+
+@pytest.fixture(scope="session")
+def corrupt_bag(bagdir: Path) -> Path:
+    p = bagdir / "corrupt.mcap"
+    g.generate_bag(p, seed=23, duration_s=60.0, faults=[g.crc_corruption(0.5)])
+    return p
+
+
+@pytest.fixture(scope="session")
+def growing_bag(bagdir: Path) -> Path:
+    """A recording that was never closed: no summary, no trailing magic."""
+    return g.write_growing(bagdir / "growing.mcap", seed=24, duration_s=30.0)
+
+
+@pytest.fixture(scope="session")
+def db3_bag(clean_bag: Path, bagdir: Path) -> Path:
+    return g.to_db3(clean_bag, bagdir / "clean_db3")
+
+
+@pytest.fixture(scope="session")
+def bag1_bag(clean_bag: Path, bagdir: Path) -> Path:
+    return g.to_bag1(clean_bag, bagdir / "clean.bag")
+
+
+@pytest.fixture(scope="session")
 def truncated_bag(bagdir: Path) -> Path:
     p = bagdir / "truncated.mcap"
     g.generate_bag(p, seed=8, duration_s=90.0, faults=[g.truncation(0.6)])

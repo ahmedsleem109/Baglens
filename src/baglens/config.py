@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 Sensitivity = Literal["low", "normal", "high"]
 
@@ -169,6 +169,12 @@ class Config:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
 
     @property
+    def current(self) -> Config:
+        """Self. Mirrors ``_ConfigProxy.current`` so callers never need to know which
+        of the two they are holding."""
+        return self
+
+    @property
     def catalog_path(self) -> Path:
         return self.cache_dir / "catalog.duckdb"
 
@@ -263,9 +269,14 @@ class _ConfigProxy:
         return f"<active {self.current!r}>"
 
 
-#: process-wide active configuration, replaced by server.main()
-CONFIG = _ConfigProxy(load_config())
+#: process-wide active configuration, replaced by server.main().
+#: Typed as Config: the proxy forwards every attribute, and pretending otherwise
+#: would push a union through every detector signature for no benefit.
+if TYPE_CHECKING:
+    CONFIG: Config
+else:
+    CONFIG = _ConfigProxy(load_config())
 
 
 def set_config(cfg: Config) -> None:
-    CONFIG._set(cfg)
+    CONFIG._set(cfg)  # type: ignore[attr-defined]

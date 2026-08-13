@@ -11,7 +11,7 @@ from .degradation import RateDegradationDetector
 from .dropped import DroppedEstimator
 from .gaps import Gap, GapDetector
 from .jitter import JitterDetector
-from .score import build_caveats, overall_score, topic_score
+from .score import build_caveats, overall_score, topic_score, verdict_for
 
 __all__ = [
     "ALL_DETECTORS",
@@ -28,4 +28,5 @@ __all__ = [
     "topic_score",
     "overall_score",
     "build_caveats",
+    "verdict_for",
 ]

@@ -165,7 +165,7 @@ class Auditor:
         return out
 
     def _assemble(self) -> HealthReport:
-        from .score import build_caveats, file_score, overall_score, topic_score
+        from .score import build_caveats, file_score, overall_score, topic_score, verdict_for
 
         mission_id = ""
         try:
@@ -270,13 +270,7 @@ class Auditor:
 
         fscore = file_score(self.integrity)
         overall = overall_score(topics, fscore, self.cfg)
-        verdict = (
-            "trustworthy"
-            if overall >= self.cfg.score.trustworthy
-            else "usable_with_caveats"
-            if overall >= self.cfg.score.usable
-            else "compromised"
-        )
+        verdict = verdict_for(overall, fscore, self.cfg)
 
         return HealthReport(
             mission_id=mission_id,

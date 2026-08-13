@@ -72,7 +72,9 @@ def register(mcp: Any) -> None:
         src = resolve(path)
         reader = open_bag(src)
         t0 = reader.metadata().start_time_ns
-        series: dict[str, tuple[list[float], list[float]]] = {}
+        # None marks a bin with no samples: plotly renders it as a break in the line,
+        # which is the honest picture of a gap
+        series: dict[str, tuple[list[float], list[float | None]]] = {}
         for spec in signals[:8]:
             topic, _, field_path = spec.partition(":")
             ts, vs = [], []
@@ -84,7 +86,7 @@ def register(mcp: Any) -> None:
             centres, binned, _gaps = resample(np.asarray(ts), np.asarray(vs), bin_s)
             series[spec] = (
                 [round(float(x), 3) for x in centres],
-                [None if not np.isfinite(v) else round(float(v), 6) for v in binned],  # type: ignore[list-item]
+                [None if not np.isfinite(v) else round(float(v), 6) for v in binned],
             )
         reader.close()
         dst = artifact_path(out_name or f"{src.stem}_plot.html")

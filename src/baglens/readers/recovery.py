@@ -9,6 +9,7 @@ from __future__ import annotations
 import struct
 import time
 from pathlib import Path
+from typing import Literal
 
 from ..models import ChunkIssue, FileIntegrity
 
@@ -20,7 +21,7 @@ OP_MESSAGE = 0x05
 OP_DATA_END = 0x0F
 
 
-def _detect_format(path: Path) -> str:
+def _detect_format(path: Path) -> Literal["mcap", "db3", "bag1", "ulog", "unknown"]:
     suffix = path.suffix.lower()
     if suffix == ".mcap":
         return "mcap"
@@ -55,7 +56,6 @@ def validate_file(path: str | Path) -> FileIntegrity:
         fi.notes.append("file does not exist")
         return fi
     fi.size_bytes = p.stat().st_size
-    fi.in_progress = _is_growing(p)
 
     if fi.format == "mcap":
         _validate_mcap(p, fi)
@@ -64,12 +64,22 @@ def validate_file(path: str | Path) -> FileIntegrity:
     else:
         fi.notes.append(f"structural validation not implemented for {fi.format}; timing checks only")
 
+    # A file with a valid summary and trailing magic has been closed by its writer, so
+    # it cannot be in progress however recent its mtime. Checking growth first would
+    # label every freshly generated fixture as "still recording".
+    fi.in_progress = (not fi.has_summary) and _is_growing(p)
+    if fi.in_progress:
+        fi.notes.append("file is still growing — audit reflects what exists right now")
+
     penalty = 0.0
     if not fi.has_summary:
         penalty += 15.0
     if fi.truncated_bytes:
         penalty += min(35.0, 10.0 + fi.truncated_bytes / max(fi.size_bytes, 1) * 100.0)
-    penalty += min(40.0, 12.0 * len(fi.chunk_issues))
+    # Scale with how much data is actually gone. A per-issue constant would score a file
+    # whose second half does not decode the same as one with a single bad message.
+    penalty += 80.0 * fi.unreadable_fraction
+    penalty += min(20.0, 6.0 * len(fi.chunk_issues))
     if not fi.readable:
         penalty = 100.0
     fi.score = max(0.0, 100.0 - penalty)
@@ -111,7 +121,10 @@ def _validate_mcap(p: Path, fi: FileIntegrity) -> None:
         fi.has_summary = True
         fi.last_readable_time = summary.statistics.message_end_time / 1e9
 
-    # Sequential recovery pass: how far can we actually read?
+    # Sequential recovery pass: how far can we actually read? This runs even when the
+    # summary is intact, because a corrupt chunk in the middle of an otherwise
+    # well-formed file is invisible from the index alone — the summary happily claims
+    # messages that no longer decode.
     last_offset = 0
     last_time = 0
     n = 0
@@ -121,6 +134,29 @@ def _validate_mcap(p: Path, fi: FileIntegrity) -> None:
         last_offset = offset
 
     unreadable = max(0, fi.size_bytes - last_offset)
+
+    fi.messages_readable = n
+    if fi.has_summary and summary is not None and summary.statistics is not None:
+        claimed = summary.statistics.message_count
+        fi.messages_claimed = claimed
+        if n < claimed:
+            # the index promises more than the data delivers: a chunk failed to
+            # decompress or its CRC did not match
+            fi.partial = True
+            fi.chunk_issues.append(
+                ChunkIssue(
+                    kind="crc_mismatch",
+                    offset=last_offset,
+                    t_end=last_time / 1e9 if last_time else None,
+                    detail=f"summary claims {claimed} messages, only {n} decode",
+                )
+            )
+            fi.last_readable_time = last_time / 1e9 if last_time else fi.last_readable_time
+            fi.notes.append(
+                f"corrupt region: {claimed - n} of {claimed} messages do not decode; "
+                f"data after t={fi.last_readable_time or 0.0:.1f}s (epoch) is untrustworthy"
+            )
+
     if not fi.has_summary and n:
         fi.partial = True
         # a healthy file ends with a summary; bytes past the last recoverable record

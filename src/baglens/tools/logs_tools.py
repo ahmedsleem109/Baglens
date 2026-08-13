@@ -8,7 +8,7 @@ from typing import Any, Literal
 import numpy as np
 from pydantic import BaseModel, Field
 
-from ..budget import apply_budget
+from ..budget import apply_budget, make_continuation
 from ..kernels.logs import cluster_templates, read_diagnostics, read_log_messages
 from ..models import Budgeted, Severity
 from ..provenance import Provenance
@@ -25,6 +25,7 @@ class LogLine(BaseModel):
 class LogQuery(Budgeted):
     lines: list[LogLine] = Field(default_factory=list)
     total_matched: int = 0
+    offset: int = 0
     levels: dict[str, int] = Field(default_factory=dict)
     provenance: Provenance = Field(default_factory=Provenance)
 
@@ -82,12 +83,20 @@ def register(mcp: Any) -> None:
         start_s: float | None = None,
         end_s: float | None = None,
         limit: int = 100,
+        continuation_token: str | None = None,
     ) -> LogQuery:
         """Filtered `/rosout` lines by level, node, regex and time window.
 
         Prefer logs.cluster_patterns first: forty thousand lines become thirty patterns,
         and only then is it worth reading individual lines from the interesting one.
+
+        Pass a previous result's `continuation_token` to read further down the match list.
         """
+        offset = 0
+        if continuation_token:
+            from ..budget import read_continuation
+
+            offset = int(read_continuation(continuation_token).get("offset", 0))
         p = resolve(path)
         entries = read_log_messages(p)
         rx = re.compile(pattern, re.I) if pattern else None
@@ -103,10 +112,12 @@ def register(mcp: Any) -> None:
         levels: dict[str, int] = {}
         for e in matched:
             levels[e.level] = levels.get(e.level, 0) + 1
+        page = matched[offset : offset + limit]
         result = LogQuery(
             lines=[LogLine(t=round(e.t, 3), level=e.level, node=e.name, message=e.msg)
-                   for e in matched[:limit]],
+                   for e in page],
             total_matched=len(matched),
+            offset=offset,
             levels=levels,
             provenance=Provenance(
                 path=str(p), method="rosout_filter", sample_count=len(entries),
@@ -118,11 +129,22 @@ def register(mcp: Any) -> None:
             r.lines = r.lines[: max(10, len(r.lines) // 3)]
             return r
 
-        return apply_budget(
+        budgeted = apply_budget(
             result, ladder=(fewer, fewer, fewer),
             narrowing=f"{len(matched)} lines matched — add a level, node or regex filter, "
                       f"or call logs.cluster_patterns instead",
         )
+        # `limit` is its own reason to continue, quite apart from the token budget:
+        # a page that fits comfortably can still have thousands of lines behind it
+        shown = offset + len(budgeted.lines)
+        if shown < len(matched):
+            budgeted.continuation_token = make_continuation({"offset": shown})
+            if not budgeted.suggested_narrowing:
+                budgeted.suggested_narrowing = (
+                    f"showing lines {offset + 1}–{shown} of {len(matched)}; pass "
+                    f"continuation_token for the next page, or filter to narrow instead"
+                )
+        return budgeted
 
     @mcp.tool(name="logs.cluster_patterns")
     def cluster_patterns(path: str, min_count: int = 1, limit: int = 40) -> PatternSet:

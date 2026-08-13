@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -23,6 +24,7 @@ from ..kernels.timeseries import (
 from ..models import Budgeted
 from ..provenance import Provenance, mission_id_for
 from ..readers import open_bag
+from ..readers.base import BagMetadata
 from .common import resolve
 
 
@@ -91,7 +93,9 @@ class WindowComparison(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
 
 
-def _extract(path: str, topic: str, field_path: str, start_s: float | None, end_s: float | None):
+def _extract(
+    path: str, topic: str, field_path: str, start_s: float | None, end_s: float | None
+) -> tuple[Path, BagMetadata, np.ndarray, np.ndarray]:
     p = resolve(path)
     reader = open_bag(p)
     meta = reader.metadata()

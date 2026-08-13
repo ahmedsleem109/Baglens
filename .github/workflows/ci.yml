@@ -23,8 +23,8 @@ jobs:
       - name: lint
         run: uv run ruff check .
       - name: types
-        run: uv run mypy src/baglens
-        continue-on-error: true
+        run: uv run mypy
+
       - name: tests
         run: uv run pytest -q
 

@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..budget import apply_budget, estimate_tokens
+from ..budget import apply_budget, estimate_tokens, make_continuation
 from ..config import CONFIG
 from ..models import (
     ClockReport,
@@ -28,7 +28,9 @@ from .common import audit, find_finding, resolve
 class GapList(BaseModel):
     gaps: list[GapDetail] = Field(default_factory=list)
     total_gaps: int = 0
+    offset: int = 0
     truncated: bool = False
+    continuation_token: str | None = None
     suggested_narrowing: str | None = None
     provenance: Provenance = Field(default_factory=Provenance)
 
@@ -108,6 +110,7 @@ def register(mcp: Any) -> None:
         topic: str | None = None,
         min_duration_s: float = 0.0,
         sensitivity: Literal["low", "normal", "high"] = "normal",
+        continuation_token: str | None = None,
     ) -> GapList:
         """List every silence, with the co-silent topics that explain it.
 
@@ -116,7 +119,15 @@ def register(mcp: Any) -> None:
         system_wide_stall (recorder, disk, CPU or power), subsystem_failure (a shared
         driver or bus — read `co_silent_topics`, that list is the diagnosis), or
         isolated_topic (that sensor or node alone).
+
+        Gaps come back longest first. If the result is truncated, pass its
+        `continuation_token` back to walk further down the list.
         """
+        offset = 0
+        if continuation_token:
+            from ..budget import read_continuation
+
+            offset = int(read_continuation(continuation_token).get("offset", 0))
         report, auditor = audit(path, [topic] if topic else None, None, sensitivity)
         gaps = auditor.all_gaps()
         details = (
@@ -129,14 +140,19 @@ def register(mcp: Any) -> None:
             details = [d for d in details if d.topic == topic]
         details.sort(key=lambda d: -d.duration_s)
 
-        out = GapList(gaps=details, total_gaps=len(details), provenance=report.provenance)
+        total = len(details)
+        page = details[offset:]
+        out = GapList(gaps=page, total_gaps=total, offset=offset, provenance=report.provenance)
         limit = CONFIG.budget.max_tokens
         while estimate_tokens(out) > limit and len(out.gaps) > 5:
             out.gaps = out.gaps[: max(5, len(out.gaps) // 2)]
             out.truncated = True
+        if out.truncated:
+            shown = offset + len(out.gaps)
+            out.continuation_token = make_continuation({"offset": shown})
             out.suggested_narrowing = (
-                f"{out.total_gaps} gaps found; showing the longest. Pass "
-                f"min_duration_s to filter, or topic= to focus on one topic."
+                f"showing gaps {offset + 1}–{shown} of {total}, longest first. Pass "
+                f"min_duration_s or topic= to narrow, or continuation_token to page on."
             )
         return out
 

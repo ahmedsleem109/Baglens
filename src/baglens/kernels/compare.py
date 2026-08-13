@@ -57,6 +57,42 @@ def load_signal(catalog: Any, mission_id: str, signal_key: str) -> MissionSignal
     )
 
 
+#: signals tried in order when looking for "the moment the robot started doing something"
+ANCHOR_SIGNALS = (
+    "/cmd_vel.linear.x",
+    "/cmd_vel.angular.z",
+    "/odom.twist.twist.linear.x",
+)
+
+
+def event_anchor(
+    catalog: Any,
+    mission_id: str,
+    signal_key: str | None = None,
+    threshold: float = 0.05,
+) -> tuple[float, str]:
+    """The first instant a mission actually started moving.
+
+    Aligning two runs on absolute time compares a robot that idled for 8 seconds
+    against one that idled for 40, and every difference after that is an artefact of
+    the offset. The anchor is the first sample whose magnitude exceeds ``threshold``.
+
+    Returns ``(t, source)``; ``source`` is empty when no anchor could be found, and
+    callers report that rather than silently aligning on zero.
+    """
+    candidates = [signal_key] if signal_key else list(ANCHOR_SIGNALS)
+    for key in candidates:
+        if key is None:
+            continue
+        sig = load_signal(catalog, mission_id, key)
+        if sig is None or sig.v.size == 0:
+            continue
+        hits = np.nonzero(np.abs(sig.v) > threshold)[0]
+        if hits.size:
+            return float(sig.t[int(hits[0])]), key
+    return 0.0, ""
+
+
 @dataclass
 class SignalDiff:
     signal_key: str

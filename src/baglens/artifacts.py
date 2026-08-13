@@ -71,7 +71,9 @@ def trim_mcap(
     return {"messages": kept, "bytes": dst.stat().st_size if dst.exists() else 0}
 
 
-def plot_html(series: dict[str, tuple[list[float], list[float]]], title: str, dst: Path) -> Path:
+def plot_html(
+    series: dict[str, tuple[list[float], list[float | None]]], title: str, dst: Path
+) -> Path:
     import plotly.graph_objects as go
 
     fig = go.Figure()
@@ -90,7 +92,8 @@ def foxglove_layout(topics: list[str], focus_s: float, dst: Path) -> Path:
     """A layout pre-pointed at the incident: plots for the named topics, playback parked
     at the interesting timestamp."""
     panels: dict[str, Any] = {}
-    layout: dict[str, Any] = {}
+    #: Foxglove accepts either a single panel id or a split node here
+    layout: Any = {}
     for i, topic in enumerate(topics[:6]):
         pid = f"Plot!{i}"
         panels[pid] = {

@@ -17,6 +17,7 @@ from ..kernels.compare import (
     build_features,
     diff_signals,
     dtw_rank,
+    event_anchor,
     load_signal,
     normalise_matrix,
     similarity,
@@ -41,6 +42,10 @@ class MissionComparison(Budgeted):
     mission_a: str
     mission_b: str
     align: str
+    #: for align="event": the instant each mission was anchored on, and the signal used
+    anchor_a_s: float = 0.0
+    anchor_b_s: float = 0.0
+    anchor_signal: str = ""
     most_changed: list[SignalDiffModel] = Field(default_factory=list)
     topics_only_in_a: list[str] = Field(default_factory=list)
     topics_only_in_b: list[str] = Field(default_factory=list)
@@ -136,13 +141,17 @@ def register(mcp: Any) -> None:
         align: Literal["absolute", "progress", "event"] = "progress",
         signals: list[str] | None = None,
         top_k: int = 10,
+        anchor_signal: str | None = None,
     ) -> MissionComparison:
         """Diff two missions signal by signal, ranked by effect size.
 
         `align` matters: "progress" normalises each mission to 0–1 of its own duration
         (the right default when runs differ in length), "absolute" compares raw seconds,
-        "event" aligns on the first motion command. Returns effect sizes and the
-        most-changed list, never raw data.
+        and "event" anchors each mission on the first instant it actually moved — use
+        that when runs idle for different lengths before starting, since otherwise every
+        later difference is an artefact of the offset. The anchor instants are reported.
+
+        Returns effect sizes and the most-changed list, never raw data.
         """
         cat = catalog()
         rows = cat.query(
@@ -156,14 +165,21 @@ def register(mcp: Any) -> None:
             "SELECT signal_key FROM signals WHERE mission_id = ?", [mission_b])}
         shared = sorted(set(signals) & keys_a & keys_b) if signals else sorted(keys_a & keys_b)
 
+        anchor_a = anchor_b = 0.0
+        anchor_used = ""
+        if align == "event":
+            anchor_a, source_a = event_anchor(cat, mission_a, anchor_signal)
+            anchor_b, source_b = event_anchor(cat, mission_b, anchor_signal)
+            anchor_used = source_a or source_b
+
         diffs = []
         for key in shared:
             sa = load_signal(cat, mission_a, key)
             sb = load_signal(cat, mission_b, key)
             if sa is None or sb is None:
                 continue
-            _ta, va = sa.aligned(align)
-            _tb, vb = sb.aligned(align)
+            _ta, va = sa.aligned(align, anchor_a)
+            _tb, vb = sb.aligned(align, anchor_b)
             diffs.append(diff_signals(va, vb, key))
         diffs.sort(key=lambda d: -d.rank)
 
@@ -179,10 +195,18 @@ def register(mcp: Any) -> None:
             if largest
             else "no shared cached signals to compare — index both missions with signals enabled"
         )
+        if align == "event" and not anchor_used:
+            verdict += (
+                " — WARNING: no motion signal was found to anchor on, so this comparison "
+                "fell back to absolute time"
+            )
         result = MissionComparison(
             mission_a=mission_a,
             mission_b=mission_b,
             align=align,
+            anchor_a_s=round(anchor_a, 3),
+            anchor_b_s=round(anchor_b, 3),
+            anchor_signal=anchor_used,
             most_changed=[SignalDiffModel(**d.__dict__) for d in diffs[:top_k]],
             topics_only_in_a=sorted(topics_a - topics_b)[:20],
             topics_only_in_b=sorted(topics_b - topics_a)[:20],

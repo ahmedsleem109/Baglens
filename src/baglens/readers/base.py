@@ -27,7 +27,7 @@ class TopicInfo:
     topic: str
     msg_type: str = ""
     count: int = 0
-    qos: dict = field(default_factory=dict)
+    qos: dict[str, str] = field(default_factory=dict)
     #: deadline in seconds if the recorded QoS declares one
     declared_period_s: float | None = None
 

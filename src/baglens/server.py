@@ -92,9 +92,9 @@ def main(argv: list[str] | None = None) -> int:
 
     mcp = build_server()
     if args.http:
-        mcp.settings.host = args.host  # type: ignore[attr-defined]
-        mcp.settings.port = args.port  # type: ignore[attr-defined]
-        mcp.run(transport="streamable-http")
+        # host and port are transport kwargs, not settings attributes: assigning them
+        # to `mcp.settings` silently did nothing and --port was ignored
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")
     return 0
