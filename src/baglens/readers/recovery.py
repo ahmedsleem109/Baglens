@@ -35,16 +35,20 @@ def _detect_format(path: Path) -> Literal["mcap", "db3", "bag1", "ulog", "unknow
 
 
 def _is_growing(path: Path, settle_s: float = 0.4) -> bool:
-    """A file whose size changes while we look at it is still being recorded."""
+    """A file whose size changes while we watch it is still being recorded.
+
+    Observation only. An earlier version also treated a recent mtime as "in progress",
+    which made the same file audit differently depending on how long ago it was written
+    — the result was not reproducible, and a recent mtime is a guess where observed
+    growth is evidence. Recency is still reported, as `recently_modified`.
+    """
     try:
         a = path.stat().st_size
         time.sleep(settle_s)
         b = path.stat().st_size
     except OSError:
         return False
-    if b != a:
-        return True
-    return (time.time() - path.stat().st_mtime) < 2.0
+    return b != a
 
 
 def validate_file(path: str | Path) -> FileIntegrity:
@@ -67,6 +71,10 @@ def validate_file(path: str | Path) -> FileIntegrity:
     # A file with a valid summary and trailing magic has been closed by its writer, so
     # it cannot be in progress however recent its mtime. Checking growth first would
     # label every freshly generated fixture as "still recording".
+    try:
+        fi.recently_modified = (time.time() - p.stat().st_mtime) < 2.0
+    except OSError:
+        fi.recently_modified = False
     fi.in_progress = (not fi.has_summary) and _is_growing(p)
     if fi.in_progress:
         fi.notes.append("file is still growing — audit reflects what exists right now")

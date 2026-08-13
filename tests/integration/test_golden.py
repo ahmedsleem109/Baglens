@@ -28,7 +28,12 @@ UPDATE = os.environ.get("BAGLENS_UPDATE_GOLDEN") == "1"
 
 #: keys whose values depend on where the file happens to live or how long the run took
 VOLATILE = {"path", "mission_id", "file", "parquet_path", "elapsed_s", "indexed_at",
-            "started_at", "size_bytes", "continuation_token"}
+            "started_at", "size_bytes", "continuation_token",
+            # true only within two seconds of the fixture being written
+            "recently_modified",
+            # a token estimate of a payload that embeds the absolute path, so it moves
+            # with the length of the temporary directory
+            "original_size"}
 
 
 @pytest.fixture(scope="module")

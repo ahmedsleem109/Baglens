@@ -8,7 +8,7 @@
       45.083
     ]
   ],
-  "original_size": null,
+  "original_size": "<volatile>",
   "provenance": {
     "method": "resample(bin_s=5.0)",
     "mission_id": "<volatile>",

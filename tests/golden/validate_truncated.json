@@ -10,19 +10,19 @@
   ],
   "format": "mcap",
   "has_summary": false,
-  "in_progress": true,
+  "in_progress": false,
   "last_readable_time": 1780000052.862,
   "messages_claimed": 0,
   "messages_readable": 11104,
   "notes": [
     "missing trailing magic \u2014 file truncated or still being written",
     "summary unreadable: RecordLengthLimitExceeded",
-    "recovered 11104 messages by sequential scan; ~31343 bytes at the tail are unreadable",
-    "file is still growing \u2014 audit reflects what exists right now"
+    "recovered 11104 messages by sequential scan; ~31343 bytes at the tail are unreadable"
   ],
   "partial": true,
   "path": "<volatile>",
   "readable": true,
+  "recently_modified": "<volatile>",
   "score": 65.334,
   "size_bytes": "<volatile>",
   "truncated_bytes": 31343

@@ -140,7 +140,10 @@ def audit(
     key = cache_key(p, tuple(detectors) if detectors else None, sens)
     cached = AUDIT_CACHE.get(key)
     if cached is not None:
-        return cached
+        # redact on the way out, not on the way in: the cache outlives a config change,
+        # and a report stored before a redaction rule was set would otherwise leak
+        report, auditor = cached
+        return redact(report.model_copy(deep=True)), auditor
 
     cfg = CONFIG.current
     if sens != CONFIG.sensitivity:
@@ -150,9 +153,9 @@ def audit(
 
     reader = open_bag(p)
     auditor = Auditor(reader, cfg=cfg, detectors=detectors, topics=topics)
-    report = redact(auditor.run())
+    report = auditor.run()
     AUDIT_CACHE.put(key, (report, auditor))
-    return report, auditor
+    return redact(report.model_copy(deep=True)), auditor
 
 
 def find_finding(finding_id: str) -> tuple[Finding, HealthReport] | None:

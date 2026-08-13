@@ -39,8 +39,10 @@ is the difference between "the camera failed" and "the recorder stalled". It cos
 uvx --from git+https://github.com/yourname/baglens baglens --stdio
 ```
 
-No ROS installation required — `.mcap`, `.db3`, `.bag` and PX4 `.ulg` are all read in
-pure Python.
+No ROS installation required. `.mcap`, rosbag2 `.db3` and ROS 1 `.bag` are read in pure
+Python and each is covered by end-to-end tests that assert all three reach identical
+conclusions on the same recording. A PX4 `.ulg` reader ships behind the `ulog` extra but
+has not yet been run against a real flight log — treat it as unproven until it is.
 
 ## Why this exists
 
@@ -131,11 +133,11 @@ asserts the real numbers instead.
 
 ## Tool surface
 
-42 tools across 10 namespaces — see [`docs/tool-reference.md`](docs/tool-reference.md).
+43 tools across 10 namespaces — see [`docs/tool-reference.md`](docs/tool-reference.md).
 
 | Namespace | Purpose |
 |---|---|
-| `health.*` | Audit a recording, find gaps, clock report, timeline, validate, explain |
+| `health.*` | Audit a recording, find gaps, clock report, QoS report, timeline, validate, explain |
 | `inspect.*` | Topics, schemas, samples, field statistics |
 | `timeseries.*` | Extract, anomalies, changepoints, correlation, window comparison |
 | `catalog.*` | Register sources, index, list, search, tag, fleet summary |
@@ -199,7 +201,8 @@ Ready-made copies live in [`examples/`](examples/).
 | `--http --port 8765` | Streamable HTTP instead of stdio |
 | `BAGLENS_MAX_TOKENS` | Per-tool response budget (default 4000) |
 | `BAGLENS_EDGE_PROFILE=1` | Shrink detector state under 2 KB/topic |
-| `BAGLENS_REDACT_TOPICS` | Comma-separated topics masked before results leave a tool |
+| `BAGLENS_REDACT_TOPICS` | Comma-separated topics dropped before results leave a tool (`/camera/*` matches a prefix) |
+| `BAGLENS_REDACT_FIELDS` | Comma-separated `field.path` or `/topic:field.path` rules; masked in payloads *and* refused through `field_stats` and `timeseries.extract` |
 
 ## Privacy and safety posture
 
@@ -221,7 +224,7 @@ Ready-made copies live in [`examples/`](examples/).
 ```bash
 git clone https://github.com/yourname/baglens && cd baglens
 uv sync
-uv run pytest -q                                    # 54 tests
+uv run pytest -q                                    # 115 tests
 uv run python -m tests.synth.generate --matrix --out /tmp/bags
 uv run python -m evals.integrity.run --bags /tmp/bags    # precision/recall
 uv run python -m evals.runner                            # tool-surface eval

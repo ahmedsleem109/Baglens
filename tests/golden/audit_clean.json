@@ -250,13 +250,14 @@
     "partial": false,
     "path": "<volatile>",
     "readable": true,
+    "recently_modified": "<volatile>",
     "score": 100.0,
     "size_bytes": "<volatile>",
     "truncated_bytes": 0
   },
   "findings": [],
   "mission_id": "<volatile>",
-  "original_size": null,
+  "original_size": "<volatile>",
   "overall_score": 100.0,
   "path": "<volatile>",
   "provenance": {

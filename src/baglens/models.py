@@ -74,7 +74,9 @@ class FileIntegrity(BaseModel):
     size_bytes: int = 0
     readable: bool = True
     partial: bool = False  # summary section missing / recovered by scan
-    in_progress: bool = False  # file still growing
+    in_progress: bool = False  # observed to grow while being validated
+    #: written to very recently — suggestive of an active recording, but not evidence
+    recently_modified: bool = False
     has_summary: bool = True
     truncated_bytes: int = 0
     #: what the index promises vs what actually decodes; the gap is corrupt data
