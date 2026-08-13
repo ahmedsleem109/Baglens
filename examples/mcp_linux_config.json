@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Native Linux/macOS, or Claude Code / Cursor anywhere. --root confines every read;",
+    "path traversal outside it is refused. Repeat --root for multiple directories."
+  ],
+  "mcpServers": {
+    "baglens": {
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/yourname/baglens",
+        "baglens", "--stdio",
+        "--root", "/home/YOU/data",
+        "--sensitivity", "normal"
+      ],
+      "env": {}
+    }
+  }
+}

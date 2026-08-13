@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --all-extras --dev
+      - name: lint
+        run: uv run ruff check .
+      - name: types
+        run: uv run mypy src/baglens
+        continue-on-error: true
+      - name: tests
+        run: uv run pytest -q
+
+  detectors:
+    # Precision/recall is a build gate: a detector dropping below target fails CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev
+      - name: generate the fault matrix and score every detector
+        run: |
+          uv run python -m evals.integrity.run \
+            --bags "${RUNNER_TEMP}/bags" --faulted 80 --clean 20 --duration 90 \
+            --out evals/integrity/RESULTS.md --gate
+        env:
+          PYTHONPATH: .
+      - name: tool-surface eval
+        run: uv run python -m evals.runner --gate --out evals/RESULTS.md
+        env:
+          PYTHONPATH: .
+      - name: performance gates
+        run: uv run python scripts/bench.py --duration 300 --gate
+        env:
+          PYTHONPATH: .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: |
+            evals/RESULTS.md
+            evals/integrity/RESULTS.md

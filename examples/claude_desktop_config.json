@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Claude Desktop runs on Windows and cannot see WSL paths, so the server is launched",
+    "through wsl.exe. Use the ABSOLUTE path to uv: WSL non-login shells often do not have",
+    "~/.local/bin on PATH, and that failure is silent.",
+    "Replace YOU with your WSL username and Ubuntu-24.04 with your distro name."
+  ],
+  "mcpServers": {
+    "baglens": {
+      "command": "wsl.exe",
+      "args": [
+        "-d", "Ubuntu-24.04",
+        "--cd", "/home/YOU/dev/baglens",
+        "--",
+        "/home/YOU/.local/bin/uv", "run", "baglens", "--stdio",
+        "--root", "/home/YOU/data"
+      ],
+      "env": {
+        "BAGLENS_MAX_TOKENS": "4000"
+      }
+    }
+  }
+}
