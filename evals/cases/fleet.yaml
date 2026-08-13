@@ -1,0 +1,117 @@
+# Corpus-level cases. These need an indexed catalog, which the runner builds once.
+
+- id: fleet_summary_answers
+  question: "What is in this corpus?"
+  fixture: corpus
+  tools:
+    - name: catalog.fleet_summary
+      args: {}
+  assert:
+    - {path: "missions", op: gte, value: 6}
+    - {path: "common_topics", op: non_empty}
+    - {path: "verdicts", op: non_empty}
+
+- id: fleet_worst_missions_listed
+  question: "Which recordings should I look at first?"
+  fixture: corpus
+  tools:
+    - name: catalog.fleet_summary
+      args: {}
+  assert:
+    - {path: "worst_missions", op: non_empty}
+    - {path: "worst_missions[0].health_score", op: lte, value: 100}
+
+- id: list_missions_filtered
+  question: "Show me the recordings that are not fully trustworthy."
+  fixture: corpus
+  tools:
+    - name: catalog.list_missions
+      args: {max_health_score: 99.9, limit: 20}
+  assert:
+    - {path: "missions", op: non_empty}
+
+- id: mission_info_from_index
+  question: "Tell me about this specific mission without reopening it."
+  fixture: corpus
+  tools:
+    - name: catalog.mission_info
+      args: {path: "{bag}"}
+  assert:
+    - {path: "topics", op: non_empty}
+    - {path: "mission.mission_id", op: non_empty}
+
+- id: search_missions_free_text
+  question: "Which recordings mention a stall?"
+  fixture: corpus
+  tools:
+    - name: catalog.search_missions
+      args: {query: "silent"}
+  assert:
+    - {path: "missions", op: non_empty}
+
+- id: tag_persists
+  question: "Label this mission as a regression."
+  fixture: corpus
+  tools:
+    - name: catalog.tag_mission
+      args: {mission_id: "{mission_id}", tag: regression}
+  assert:
+    - {path: "mission.tags", op: contains, value: regression}
+
+- id: rank_by_gaps
+  question: "Which missions have the most gaps?"
+  fixture: corpus
+  tools:
+    - name: compare.rank_missions
+      args: {metric: gap_count, ascending: false, limit: 5}
+  assert:
+    - {path: "missions", op: non_empty}
+    - {path: "metric", op: eq, value: gap_count}
+
+- id: compare_two_missions
+  question: "What is different between these two runs?"
+  fixture: corpus
+  tools:
+    - name: compare.missions
+      args: {mission_a: "{mission_id}", mission_b: "{mission_id_b}"}
+  assert:
+    - {path: "verdict", op: non_empty}
+    - {path: "align", op: eq, value: progress}
+
+- id: find_similar_has_reasons
+  question: "Has this happened before?"
+  fixture: corpus
+  tools:
+    - name: compare.find_similar
+      args: {mission_id: "{mission_id}", top_k: 3}
+  assert:
+    - {path: "matches", op: non_empty}
+    - {path: "matches[0].why", op: non_empty}
+
+- id: cohort_split_by_verdict
+  question: "Are the compromised recordings worse in any measurable way?"
+  fixture: corpus
+  tools:
+    - name: compare.cohorts
+      args: {split_by: verdict, metric: gap_count}
+  assert:
+    - {path: "cohorts", op: non_empty}
+    - {path: "verdict", op: non_empty}
+
+- id: regression_scan_runs
+  question: "Is anything trending worse across the fleet?"
+  fixture: corpus
+  tools:
+    - name: compare.regression_scan
+      args: {min_missions: 3}
+  assert:
+    - {path: "rows", op: non_empty}
+
+- id: index_status_reports
+  question: "Is the corpus finished indexing?"
+  fixture: corpus
+  tools:
+    - name: catalog.index_status
+      args: {}
+  assert:
+    - {path: "total", op: gte, value: 1}

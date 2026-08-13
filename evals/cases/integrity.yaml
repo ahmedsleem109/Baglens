@@ -1,0 +1,226 @@
+# Integrity cases — the health.* surface against bags with known faults.
+#
+# `fixture` names a generator recipe (see evals/fixtures.py). `tools` is the reference
+# solution: the shortest correct path through the tool surface. Deterministic mode runs
+# it and checks the assertions; model mode gives the model the question and compares.
+
+- id: gap_found
+  question: "Did any topic go silent during this recording, and when?"
+  fixture: dropout_scan
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: gap}
+    - {path: "verdict", op: ne, value: trustworthy}
+    - {path: "findings[0].topic", op: eq, value: /scan}
+
+- id: gap_window_accurate
+  question: "Exactly when did /scan stop and resume?"
+  fixture: dropout_scan
+  tools:
+    - name: health.find_gaps
+      args: {path: "{bag}", topic: /scan}
+  assert:
+    - {path: "gaps[0].t_start", op: approx, value: 40.0, tolerance: 2.0}
+    - {path: "gaps[0].duration_s", op: approx, value: 8.0, tolerance: 2.0}
+
+- id: gap_isolated_not_stall
+  question: "Was that silence a sensor failure or a recorder stall?"
+  fixture: dropout_scan
+  tools:
+    - name: health.find_gaps
+      args: {path: "{bag}"}
+  assert:
+    - {path: "gaps[0].classification", op: eq, value: isolated_topic}
+    - {path: "gaps[0].concurrency", op: lt, value: 0.2}
+
+- id: stall_is_system_wide
+  question: "Four topics went quiet at once — sensor problem or recorder problem?"
+  fixture: system_stall
+  tools:
+    - name: health.find_gaps
+      args: {path: "{bag}"}
+  assert:
+    - {path: "gaps[0].classification", op: eq, value: system_wide_stall}
+    - {path: "gaps[0].co_silent_topics", op: len_gte, value: 2}
+
+- id: stall_finding_explains
+  question: "What should I investigate for that simultaneous outage?"
+  fixture: system_stall
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[0].interpretation", op: contains, value: recorder}
+    - {path: "caveats", op: non_empty}
+
+- id: clean_bag_is_clean
+  question: "Is this recording trustworthy?"
+  fixture: clean
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "verdict", op: eq, value: trustworthy}
+    - {path: "findings", op: empty}
+    - {path: "overall_score", op: gte, value: 95}
+
+- id: clean_bag_no_phantom_drops
+  question: "Did this healthy recording lose any messages?"
+  fixture: clean
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "topics[0].estimated_dropped", op: eq, value: 0}
+
+- id: rate_degradation_trend
+  question: "Is any topic slowing down over the course of the run?"
+  fixture: degrading_odom
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: rate_degradation}
+    - {path: "findings[].summary", op: any_contains, value: slowed}
+
+- id: rate_degradation_caveat
+  question: "Can I compare the start and end of this run directly?"
+  fixture: degrading_odom
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "caveats", op: non_empty}
+
+- id: jitter_expansion
+  question: "Has the timing of /imu/data become irregular?"
+  fixture: jittery_imu
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: jitter}
+
+- id: diffuse_drops_estimated
+  question: "How many camera frames did this recording lose?"
+  fixture: dropping_camera
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: dropped}
+    - {path: "topics[].estimated_dropped", op: non_empty}
+
+- id: diffuse_drops_diagnosis
+  question: "Were those losses clustered or spread out?"
+  fixture: dropping_camera
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[0].interpretation", op: non_empty}
+
+- id: recorder_lag_curve
+  question: "Was the recorder keeping up with the publishers?"
+  fixture: lagging_recorder
+  tools:
+    - name: health.clock_report
+      args: {path: "{bag}"}
+  assert:
+    - {path: "lag_growth_s", op: gt, value: 0.1}
+    - {path: "lag_curve_t", op: len_gte, value: 10}
+    - {path: "monotonic", op: eq, value: true}
+
+- id: recorder_lag_finding
+  question: "Why might frames be missing even though the disk was fast?"
+  fixture: lagging_recorder
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: clock_lag}
+
+- id: clock_step_located
+  question: "Did the clock jump during this recording?"
+  fixture: stepping_clock
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: clock}
+    - {path: "findings[0].t_start", op: approx, value: 45.0, tolerance: 3.0}
+
+- id: clock_step_not_duplicated
+  question: "How many distinct clock steps were there?"
+  fixture: stepping_clock
+  tools:
+    - name: health.clock_report
+      args: {path: "{bag}"}
+  assert:
+    - {path: "steps", op: len_gte, value: 1}
+
+- id: truncated_file_degrades
+  question: "This file will not open in other tools — what is in it?"
+  fixture: truncated
+  tools:
+    - name: health.validate_file
+      args: {path: "{bag}"}
+  assert:
+    - {path: "readable", op: eq, value: true}
+    - {path: "has_summary", op: eq, value: false}
+    - {path: "partial", op: eq, value: true}
+    - {path: "notes", op: non_empty}
+
+- id: truncated_file_audit_still_works
+  question: "Audit this damaged recording anyway."
+  fixture: truncated
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "topics", op: non_empty}
+    - {path: "findings[].detector", op: any_contains, value: file_integrity}
+    - {path: "caveats", op: non_empty}
+
+- id: missing_file_no_crash
+  question: "Audit a file that does not exist."
+  fixture: missing
+  tools:
+    - name: health.validate_file
+      args: {path: "{bag}"}
+  assert:
+    - {path: "readable", op: eq, value: false}
+    - {path: "score", op: eq, value: 0.0}
+
+- id: timeline_shows_shape
+  question: "Show me which topics were alive when."
+  fixture: system_stall
+  tools:
+    - name: health.topic_timeline
+      args: {path: "{bag}", width: 60}
+  assert:
+    - {path: "rows", op: len_gte, value: 3}
+    - {path: "legend", op: contains, value: silent}
+
+- id: explain_finding_gives_rule
+  question: "Why exactly was that flagged?"
+  fixture: dropout_scan
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+    - name: health.explain_finding
+      args: {finding_id: "{findings[0].id}"}
+  assert:
+    - {path: "rule", op: non_empty}
+    - {path: "next_steps", op: non_empty}
+
+- id: qos_mismatch_reported
+  question: "Does the declared QoS match what the topic actually does?"
+  fixture: qos_mismatch
+  tools:
+    - name: health.audit_recording
+      args: {path: "{bag}"}
+  assert:
+    - {path: "findings[].detector", op: any_contains, value: qos_mismatch}

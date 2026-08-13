@@ -1,0 +1,229 @@
+# Single-mission analysis: inspect.*, timeseries.*, logs.*, spatial.*, frames.*, export.*
+
+- id: list_topics
+  question: "What topics are in this bag?"
+  fixture: clean
+  tools:
+    - name: inspect.list_topics
+      args: {path: "{bag}"}
+  assert:
+    - {path: "topics", op: len_gte, value: 5}
+    - {path: "topics[].topic", op: any_contains, value: /odom}
+    - {path: "duration_s", op: gt, value: 10}
+
+- id: topic_schema_before_query
+  question: "What fields does /odom have?"
+  fixture: clean
+  tools:
+    - name: inspect.topic_schema
+      args: {path: "{bag}", topic: /odom}
+  assert:
+    - {path: "definition", op: contains, value: twist}
+    - {path: "msg_type", op: contains, value: Odometry}
+
+- id: field_stats_cheap
+  question: "What was the forward speed distribution?"
+  fixture: clean
+  tools:
+    - name: inspect.field_stats
+      args: {path: "{bag}", topic: /odom, field_path: twist.twist.linear.x}
+  assert:
+    - {path: "stats.count", op: gt, value: 100}
+    - {path: "stats.mean", op: approx, value: 0.5, tolerance: 0.2}
+
+- id: sample_messages_capped
+  question: "Show me a couple of /cmd_vel messages."
+  fixture: clean
+  tools:
+    - name: inspect.sample_messages
+      args: {path: "{bag}", topic: /cmd_vel, count: 3}
+  assert:
+    - {path: "samples", op: len_gte, value: 1}
+    - {path: "samples[0].data", op: non_empty}
+
+- id: get_message_at
+  question: "What was published on /odom at t=20s?"
+  fixture: clean
+  tools:
+    - name: inspect.get_message_at
+      args: {path: "{bag}", topic: /odom, t: 20.0}
+  assert:
+    - {path: "samples[0].t", op: approx, value: 20.0, tolerance: 0.5}
+
+- id: timeseries_extract_binned
+  question: "Plot the robot's x position over time."
+  fixture: clean
+  tools:
+    - name: timeseries.extract
+      args: {path: "{bag}", topic: /odom, field_path: pose.pose.position.x, bin_s: 5.0}
+  assert:
+    - {path: "values", op: len_gte, value: 5}
+    - {path: "stats.count", op: gt, value: 100}
+
+- id: timeseries_gaps_not_interpolated
+  question: "Extract /scan range_max across the dropout."
+  fixture: dropout_scan
+  tools:
+    - name: timeseries.extract
+      args: {path: "{bag}", topic: /scan, field_path: range_max, bin_s: 1.0}
+  assert:
+    - {path: "gaps", op: non_empty}
+    - {path: "provenance.warnings", op: non_empty}
+
+- id: anomalies_mad
+  question: "Are there spikes in the IMU acceleration?"
+  fixture: clean
+  tools:
+    - name: timeseries.detect_anomalies
+      args: {path: "{bag}", topic: /imu/data, field_path: linear_acceleration.z, sensitivity: 6.0}
+  assert:
+    - {path: "method", op: eq, value: mad}
+    - {path: "provenance.sample_count", op: gt, value: 100}
+
+- id: changepoints
+  question: "Did the commanded speed change partway through?"
+  fixture: clean
+  tools:
+    - name: timeseries.detect_changepoints
+      args: {path: "{bag}", topic: /cmd_vel, field_path: linear.x}
+  assert:
+    - {path: "changepoints", op: non_empty}
+
+- id: correlate_with_lag
+  question: "Does /odom follow /cmd_vel, and by how much?"
+  fixture: clean
+  tools:
+    - name: timeseries.correlate
+      args:
+        path: "{bag}"
+        topic_a: /cmd_vel
+        field_a: linear.x
+        topic_b: /odom
+        field_b: twist.twist.linear.x
+  assert:
+    - {path: "interpretation", op: non_empty}
+
+- id: compare_windows_effect_size
+  question: "Was the robot faster in the second half?"
+  fixture: clean
+  tools:
+    - name: timeseries.compare_windows
+      args:
+        path: "{bag}"
+        topic: /odom
+        field_path: twist.twist.linear.x
+        a_start_s: 0
+        a_end_s: 40
+        b_start_s: 45
+        b_end_s: 85
+  assert:
+    - {path: "verdict", op: non_empty}
+    - {path: "stats_a.count", op: gt, value: 100}
+
+- id: log_patterns_compress
+  question: "Summarise the log output."
+  fixture: rich
+  tools:
+    - name: logs.cluster_patterns
+      args: {path: "{bag}"}
+  assert:
+    - {path: "patterns", op: non_empty}
+    - {path: "compression", op: contains, value: patterns}
+    - {path: "total_lines", op: gt, value: 50}
+
+- id: log_query_filtered
+  question: "Show me the INFO lines from the planner."
+  fixture: rich
+  tools:
+    - name: logs.query
+      args: {path: "{bag}", level: INFO, limit: 5}
+  assert:
+    - {path: "total_matched", op: gt, value: 10}
+    - {path: "lines", op: len_gte, value: 1}
+
+- id: event_timeline_merged
+  question: "What happened during this recording, in order?"
+  fixture: system_stall
+  tools:
+    - name: logs.timeline
+      args: {path: "{bag}"}
+  assert:
+    - {path: "events", op: non_empty}
+
+- id: trajectory_summary
+  question: "How far did the robot travel and did it stop?"
+  fixture: rich
+  tools:
+    - name: spatial.trajectory_summary
+      args: {path: "{bag}", topic: /odom}
+  assert:
+    - {path: "path_length_m", op: gt, value: 1.0}
+    - {path: "samples", op: gt, value: 100}
+
+- id: tf_report_links
+  question: "Is the transform tree healthy?"
+  fixture: rich
+  tools:
+    - name: spatial.tf_report
+      args: {path: "{bag}"}
+  assert:
+    - {path: "links", op: non_empty}
+    - {path: "roots", op: non_empty}
+
+- id: contact_sheet_built
+  question: "Show me what the camera saw around t=40s."
+  fixture: rich
+  tools:
+    - name: frames.contact_sheet
+      args: {path: "{bag}", start_s: 35, end_s: 45, count: 4}
+  assert:
+    - {path: "contact_sheet_file", op: non_empty}
+    - {path: "frames", op: non_empty}
+
+- id: keyframes_extracted
+  question: "Give me three frames around the incident."
+  fixture: rich
+  tools:
+    - name: frames.extract_keyframes
+      args: {path: "{bag}", around_s: 40.0, count: 3}
+  assert:
+    - {path: "frames", op: len_gte, value: 1}
+
+- id: export_report_cited
+  question: "Write up this recording's problems."
+  fixture: system_stall
+  tools:
+    - name: export.report
+      args: {path: "{bag}"}
+  assert:
+    - {path: "markdown", op: contains, value: "cannot tell you"}
+    - {path: "findings", op: gt, value: 0}
+
+- id: export_trim_evidence
+  question: "Cut me a shareable slice around the outage."
+  fixture: system_stall
+  tools:
+    - name: export.trim_bag
+      args: {path: "{bag}", start_s: 35, end_s: 55}
+  assert:
+    - {path: "detail.messages", op: gt, value: 100}
+    - {path: "bytes", op: gt, value: 1000}
+
+- id: export_foxglove_handoff
+  question: "Give me a Foxglove layout pointed at the incident."
+  fixture: system_stall
+  tools:
+    - name: export.foxglove_layout
+      args: {path: "{bag}", topics: [/odom, /imu/data], focus_s: 42.0}
+  assert:
+    - {path: "detail.panels", op: gte, value: 2}
+
+- id: export_plot_html
+  question: "Plot the forward speed."
+  fixture: clean
+  tools:
+    - name: export.plot
+      args: {path: "{bag}", signals: ["/odom:twist.twist.linear.x"]}
+  assert:
+    - {path: "detail.series", op: gte, value: 1}
+    - {path: "bytes", op: gt, value: 1000}
