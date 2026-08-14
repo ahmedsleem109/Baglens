@@ -120,6 +120,10 @@ class CaseScore:
     cited_claims: int = 0
     error: str = ""
     assertions: list[AssertionResult] = field(default_factory=list)
+    #: model mode only — figures in the model's prose that appear in no tool result
+    unsupported_numbers: list[str] = field(default_factory=list)
+    answer: str = ""
+    wall_seconds: float = 0.0
 
     @property
     def passed(self) -> bool:
@@ -207,6 +211,60 @@ class SuiteScore:
         claims = sum(c.claims for c in self.cases)
         cited = sum(c.cited_claims for c in self.cases)
         return 1.0 - (cited / claims) if claims else 0.0
+
+    @property
+    def unsupported_number_rate(self) -> float:
+        """Fraction of cases whose answer quoted a figure no tool returned."""
+        if not self.cases:
+            return 0.0
+        return sum(1 for c in self.cases if c.unsupported_numbers) / self.n
+
+    def render_model(self, title: str, model: str) -> str:
+        """Model-in-the-loop report. Separate from `render` because the interesting
+        columns differ: what the model *did* matters more than which assertion failed."""
+        lines = [
+            f"# {title}",
+            "",
+            f"Model: **`{model}`**. {self.n} cases, real tool surface, live agentic loop.",
+            "",
+            f"- pass rate: **{self.pass_rate * 100:.1f}%**",
+            f"- mean correctness: {self.mean_correctness * 100:.1f}%",
+            f"- mean tool-call efficiency: {self.mean_efficiency * 100:.1f}% "
+            f"(reference sequence length / calls actually made)",
+            f"- mean tokens per case: {self.mean_tokens:,.0f} (total {self.total_tokens:,})",
+            f"- uncited claims in tool output: {self.hallucination_rate * 100:.2f}%",
+            f"- **answers quoting an unsupported figure: {self.unsupported_number_rate * 100:.1f}%**",
+            "",
+            "| case | correct | calls | tokens | unsupported figures | detail |",
+            "|---|---|---|---|---|---|",
+        ]
+        for c in sorted(self.cases, key=lambda c: (c.correctness, c.case_id)):
+            failed = next((a for a in c.assertions if not a.passed), None)
+            detail = c.error or (f"`{failed.path}` {failed.op} {failed.expected!r}" if failed else "")
+            bad = ", ".join(c.unsupported_numbers[:3]) or "—"
+            lines.append(
+                f"| `{c.case_id}` | {c.correctness * 100:.0f}% | {c.tool_calls} | "
+                f"{c.tokens:,} | {bad} | {detail[:80]} |"
+            )
+        lines += [
+            "",
+            "## How to read this",
+            "",
+            "**Correctness** here is not the deterministic runner's check. A model may reach "
+            "the answer by a different route, so each case's assertions are evaluated against "
+            "*every* tool result the model received — the question is whether it retrieved the "
+            "right evidence, not whether it retrieved it in the reference order.",
+            "",
+            "**Efficiency** is the reference sequence length over the calls actually made, so "
+            "1.0 means the model matched a hand-written path and lower means it explored. "
+            "Exploring is not automatically worse.",
+            "",
+            "**Unsupported figures** are decimals and large integers in the model's prose that "
+            "appear in no tool result it received, after allowing for rounding. It is a floor "
+            "on how anchored the answer is, not a hallucination oracle.",
+            "",
+        ]
+        return "\n".join(lines) + "\n"
 
     def render(self, title: str = "baglens eval results") -> str:
         lines = [

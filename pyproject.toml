@@ -24,12 +24,15 @@ dependencies = [
 [project.optional-dependencies]
 # PX4 flight logs. Kept optional so the core install stays small and ROS-free.
 ulog = ["pyulog>=1.2.0"]
+# Model-in-the-loop evals (`python -m evals.runner --model`). Optional because the
+# deterministic eval path — the one CI runs — must never need an API key or a network.
+evals = ["anthropic>=0.40.0"]
 
 [project.scripts]
 baglens = "baglens.server:main"
 
 [project.urls]
-Homepage = "https://github.com/yourname/baglens"
+Homepage = "https://github.com/ahmedsleem109/Baglens"
 
 [build-system]
 requires = ["uv_build>=0.11.32,<0.12.0"]
