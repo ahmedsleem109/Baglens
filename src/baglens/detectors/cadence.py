@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import deque
 from statistics import median
+from typing import Any
 
 from ..config import CONFIG, CadenceConfig
 from .base import LogHistogram, RollingWelford
@@ -163,3 +164,49 @@ class TopicCadence:
 
     def state_bytes(self) -> int:
         return 8 * self.cfg.hist_bins + 8 * self.cfg.ring_size + 8 * self.cv_window.window + 128
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        return {
+            "topic": self.topic,
+            "hist": self.hist.to_state(),
+            "ring": list(self.ring),
+            "count": self.count,
+            "bytes_total": self.bytes_total,
+            "first_t": self.first_t,
+            "last_t": self.last_t,
+            "warm_t0": self._warm_t0,
+            "cv_window": self.cv_window.to_state(),
+            "cv_baseline": self.cv_baseline,
+            "period_cv": self.period_cv,
+            "declared_period": self.declared_period,
+            "qos_mismatch": self.qos_mismatch,
+            "expected_period": self.expected_period,
+            "hz_source": self.hz_source,
+            "ready": self.ready,
+        }
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any], cfg: CadenceConfig | None = None) -> TopicCadence:
+        obj = cls(
+            str(state["topic"]),
+            cfg,
+            declared_period_s=state["declared_period"],
+            cv_window_size=int(state["cv_window"]["window"]),
+        )
+        obj.hist = LogHistogram.from_state(state["hist"])
+        obj.ring = deque((float(x) for x in state["ring"]), maxlen=obj.cfg.ring_size)
+        obj.count = int(state["count"])
+        obj.bytes_total = int(state["bytes_total"])
+        obj.first_t = state["first_t"]
+        obj.last_t = state["last_t"]
+        obj._warm_t0 = state["warm_t0"]
+        obj.cv_window = RollingWelford.from_state(state["cv_window"])
+        obj.cv_baseline = state["cv_baseline"]
+        obj.period_cv = float(state["period_cv"])
+        obj.qos_mismatch = bool(state["qos_mismatch"])
+        obj.expected_period = state["expected_period"]
+        obj.hz_source = str(state["hz_source"])
+        obj.ready = bool(state["ready"])
+        return obj

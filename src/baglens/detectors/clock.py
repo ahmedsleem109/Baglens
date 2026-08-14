@@ -17,6 +17,8 @@ State: 3 floats per topic plus a fixed 200-slot decimating curve buffer.
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..config import CONFIG, Config
 from ..models import ClockReport, ClockStep, Finding, Severity
 from ..provenance import Provenance
@@ -49,6 +51,22 @@ class DecimatingCurve:
             self.ts = self.ts[::2]
             self.vs = self.vs[::2]
             self.stride *= 2
+
+    def to_state(self) -> dict[str, Any]:
+        # `stride` and `_i` are as much of the state as the samples: they decide when
+        # the next halving happens, so a curve restored without them re-densifies and
+        # drifts away from the uninterrupted run.
+        return {"cap": self.cap, "ts": list(self.ts), "vs": list(self.vs),
+                "stride": self.stride, "i": self._i}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> DecimatingCurve:
+        obj = cls(int(state["cap"]))
+        obj.ts = [float(x) for x in state["ts"]]
+        obj.vs = [float(x) for x in state["vs"]]
+        obj.stride = int(state["stride"])
+        obj._i = int(state["i"])
+        return obj
 
     def downsample(self, n: int) -> tuple[list[float], list[float]]:
         if len(self.ts) <= n:
@@ -257,3 +275,44 @@ class ClockDetector:
 
     def state_bytes(self) -> int:
         return 8 * 2 * self.curve.cap + 48 * len(self._last) + 256
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        return {
+            "lag": self.lag.to_state(),
+            "curve": self.curve.to_state(),
+            "lag_start": self.lag_start,
+            "lag_end": self.lag_end,
+            "lag_max": self.lag_max,
+            "backward_jumps": self.backward_jumps,
+            "backward_times": list(self.backward_times),
+            "max_backward": self.max_backward,
+            "steps": [s.model_dump(mode="json") for s in self.steps],
+            "last": {k: list(v) for k, v in self._last.items()},
+            "have_publish_time": self.have_publish_time,
+            "n": self.n,
+            "offset": self._offset,
+            "last_step_t": self._last_step_t,
+            "last_back_t": self._last_back_t,
+        }
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any], cfg: Config | None = None) -> ClockDetector:
+        obj = cls(cfg)
+        obj.lag = Ewma.from_state(state["lag"])
+        obj.curve = DecimatingCurve.from_state(state["curve"])
+        obj.lag_start = state["lag_start"]
+        obj.lag_end = float(state["lag_end"])
+        obj.lag_max = float(state["lag_max"])
+        obj.backward_jumps = int(state["backward_jumps"])
+        obj.backward_times = [float(x) for x in state["backward_times"]]
+        obj.max_backward = float(state["max_backward"])
+        obj.steps = [ClockStep.model_validate(s) for s in state["steps"]]
+        obj._last = {k: (float(v[0]), float(v[1])) for k, v in state["last"].items()}
+        obj.have_publish_time = bool(state["have_publish_time"])
+        obj.n = int(state["n"])
+        obj._offset = float(state["offset"])
+        obj._last_step_t = float(state["last_step_t"])
+        obj._last_back_t = float(state["last_back_t"])
+        return obj

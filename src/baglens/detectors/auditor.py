@@ -24,6 +24,7 @@ from ..provenance import Provenance, mission_id_for
 from ..readers.base import BagReader
 from .cadence import TopicCadence
 from .gaps import Gap, GapDetector
+from .timeline import TimelineAccumulator
 
 ALL_DETECTORS = (
     "cadence",
@@ -78,8 +79,6 @@ class Auditor:
         self.clock: Any = None
         self.correlation: Any = None
         self.integrity: FileIntegrity | None = None
-        from .timeline import TimelineAccumulator
-
         self.timeline = TimelineAccumulator()
 
     # -- the pass ----------------------------------------------------------
@@ -109,46 +108,138 @@ class Auditor:
         self.states[topic] = st
         return st
 
-    def run(self) -> HealthReport:
-        if "clock" in self.enabled:
+    def _ensure_global_detectors(self) -> None:
+        """Cross-topic detectors, created once. Guarded so a restored auditor keeps the
+        state it was given instead of starting them over."""
+        if "clock" in self.enabled and self.clock is None:
             from .clock import ClockDetector
 
             self.clock = ClockDetector(self.cfg)
-        if "correlation" in self.enabled:
+        if "correlation" in self.enabled and self.correlation is None:
             from .correlation import CorrelationDetector
 
             self.correlation = CorrelationDetector(self.cfg)
 
-        for arrival in self.reader.arrivals(self.topic_filter):
-            log_t_ns, pub_t_ns = arrival.log_time_ns, arrival.publish_time_ns
-            if self.t0 is None:
-                self.t0 = log_t_ns / 1e9
-            t = log_t_ns / 1e9 - self.t0
-            pub_t = pub_t_ns / 1e9 - self.t0
-            self.n += 1
-            self.t_end = max(self.t_end, t)
+    def push(self, arrival: Any) -> None:
+        """Feed one arrival to every detector. The whole pass is this, in a loop."""
+        log_t_ns, pub_t_ns = arrival.log_time_ns, arrival.publish_time_ns
+        if self.t0 is None:
+            self.t0 = log_t_ns / 1e9
+        t = log_t_ns / 1e9 - self.t0
+        pub_t = pub_t_ns / 1e9 - self.t0
+        self.n += 1
+        self.t_end = max(self.t_end, t)
 
-            st = self._state_for(arrival.topic)
-            dt = st.cadence.push(t, arrival.size_bytes)
-            self.timeline.push(arrival.topic, t)
+        st = self._state_for(arrival.topic)
+        dt = st.cadence.push(t, arrival.size_bytes)
+        self.timeline.push(arrival.topic, t)
 
-            if st.gap is not None:
-                st.gap.on_arrival(t, dt)
-            if st.degradation is not None:
-                st.degradation.on_arrival(t, dt)
-            if st.jitter is not None:
-                st.jitter.on_arrival(t, dt)
-            if self.clock is not None:
-                self.clock.on_arrival(arrival.topic, t, pub_t)
-            if self.correlation is not None:
-                self.correlation.on_arrival(arrival.topic, t, dt, st.cadence.provisional_period)
+        if st.gap is not None:
+            st.gap.on_arrival(t, dt)
+        if st.degradation is not None:
+            st.degradation.on_arrival(t, dt)
+        if st.jitter is not None:
+            st.jitter.on_arrival(t, dt)
+        if self.clock is not None:
+            self.clock.on_arrival(arrival.topic, t, pub_t)
+        if self.correlation is not None:
+            self.correlation.on_arrival(arrival.topic, t, dt, st.cadence.provisional_period)
 
+    def finish(self) -> HealthReport:
+        """Close every detector and assemble the report. Safe to call on a restored
+        auditor: nothing here needs an arrival this process did not see."""
         if "file_integrity" in self.enabled:
             from ..readers.recovery import validate_file
 
             self.integrity = validate_file(self.reader.path)
 
         return self._assemble()
+
+    def run(self) -> HealthReport:
+        self._ensure_global_detectors()
+        for arrival in self.reader.arrivals(self.topic_filter):
+            self.push(arrival)
+        return self.finish()
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        """The complete auditor as JSON-safe data.
+
+        This is what makes the streaming constraint pay: an audit interrupted at any
+        arrival resumes from here and reaches the same findings as one that ran
+        straight through. ``t0`` travels with it because every timestamp downstream is
+        relative to it — a resumed pass that re-derived ``t0`` from its first arrival
+        would silently shift the whole second half of the timeline.
+        """
+        self._ensure_global_detectors()
+        return {
+            "version": 1,
+            "t0": self.t0,
+            "t_end": self.t_end,
+            "n": self.n,
+            "enabled": sorted(self.enabled),
+            "topic_filter": self.topic_filter,
+            "timeline": self.timeline.to_state(),
+            "clock": self.clock.to_state() if self.clock is not None else None,
+            "correlation": self.correlation.to_state() if self.correlation is not None else None,
+            "topics": {
+                topic: {
+                    "msg_type": st.msg_type,
+                    "cadence": st.cadence.to_state(),
+                    "gap": st.gap.to_state() if st.gap is not None else None,
+                    "degradation": st.degradation.to_state() if st.degradation is not None else None,
+                    "jitter": st.jitter.to_state() if st.jitter is not None else None,
+                }
+                for topic, st in self.states.items()
+            },
+        }
+
+    @classmethod
+    def from_state(
+        cls, state: dict[str, Any], reader: BagReader, cfg: Config | None = None
+    ) -> Auditor:
+        version = int(state.get("version", 0))
+        if version != 1:
+            raise ValueError(f"unsupported auditor checkpoint version {version!r}")
+
+        obj = cls(
+            reader,
+            cfg,
+            detectors=list(state["enabled"]),
+            topics=state["topic_filter"],
+        )
+        obj.t0 = state["t0"]
+        obj.t_end = float(state["t_end"])
+        obj.n = int(state["n"])
+        obj.timeline = TimelineAccumulator.from_state(state["timeline"])
+
+        if state["clock"] is not None:
+            from .clock import ClockDetector
+
+            obj.clock = ClockDetector.from_state(state["clock"], obj.cfg)
+        if state["correlation"] is not None:
+            from .correlation import CorrelationDetector
+
+            obj.correlation = CorrelationDetector.from_state(state["correlation"], obj.cfg)
+
+        for topic, ts in state["topics"].items():
+            cadence = TopicCadence.from_state(ts["cadence"], obj.cfg.cadence)
+            st = TopicState(cadence=cadence, msg_type=str(ts["msg_type"]))
+            if ts["gap"] is not None:
+                st.gap = GapDetector.from_state(ts["gap"], cadence, obj.cfg)
+            if ts["degradation"] is not None:
+                from .degradation import RateDegradationDetector
+
+                st.degradation = RateDegradationDetector.from_state(
+                    ts["degradation"], cadence, obj.cfg
+                )
+            if ts["jitter"] is not None:
+                from .jitter import JitterDetector
+
+                st.jitter = JitterDetector.from_state(ts["jitter"], cadence, obj.cfg)
+            obj.states[topic] = st
+        return obj
 
     # -- assembly ----------------------------------------------------------
 
@@ -187,9 +278,28 @@ class Auditor:
         findings: list[Finding] = []
         topics: list[TopicHealth] = []
 
+        # System-wide stalls are resolved *first*, because everything below has to know
+        # which silences were the recorder's fault rather than the topic's. Scoring a
+        # topic for a stall it merely sat through — and then billing it for the messages
+        # it "lost" — is what made every real recording read as compromised.
+        stall_windows: list[tuple[float, float]] = []
+        if self.correlation is not None:
+            self.correlation.classify(self.all_gaps())
+            stall_windows = [(s.start, s.end) for s in self.correlation.merged_stalls()]
+
         for topic, st in sorted(self.states.items()):
             cad = st.cadence
             silent = st.gap.total_silent if st.gap else 0.0
+            stall_silent = (
+                _overlap_seconds(st.gap.gaps(), stall_windows) if st.gap else 0.0
+            )
+            reason = _unassessable_reason(cad, self.cfg)
+            if reason is not None:
+                # Every rate-based check downstream is derived from a period this topic
+                # never actually held, so none of their findings mean anything here.
+                findings.append(_aperiodic_finding(topic, cad, self.t_end, reason))
+                topics.append(_aperiodic_health(topic, st, cad, silent, stall_silent))
+                continue
             th = TopicHealth(
                 topic=topic,
                 msg_type=st.msg_type,
@@ -201,6 +311,7 @@ class Auditor:
                 gap_count=st.gap.gap_count if st.gap else 0,
                 max_gap_s=round(st.gap.max_gap, 4) if st.gap else 0.0,
                 total_silent_s=round(silent, 4),
+                stall_silent_s=round(stall_silent, 4),
             )
             if st.gap is not None:
                 findings += st.gap.finalize(self.t_end)
@@ -236,7 +347,7 @@ class Auditor:
             if "dropped" in self.enabled:
                 from .dropped import DroppedEstimator
 
-                est = DroppedEstimator(topic, cad, st.gap, self.cfg)
+                est = DroppedEstimator(topic, cad, st.gap, self.cfg, stall_silent_s=stall_silent)
                 th.estimated_dropped, th.dropped_confidence = est.estimate(self.t_end)
                 findings += est.finalize(self.t_end)
             th.score = topic_score(th, findings, self.cfg, duration_s=self.t_end)
@@ -248,11 +359,12 @@ class Auditor:
             findings += self.clock.finalize(self.t_end)
 
         if self.correlation is not None:
-            self.correlation.classify(self.all_gaps())
             findings += self.correlation.finalize(self.t_end)
 
         if self.integrity is not None:
             findings += _integrity_findings(self.integrity, self.t_end, self.t0 or 0.0)
+
+        findings = _roll_up_stall_gaps(findings, stall_windows)
 
         for f in findings:
             f.id = self._finding_id(f)
@@ -269,7 +381,7 @@ class Auditor:
         findings.sort(key=lambda f: (-int(f.severity), f.t_start))
 
         fscore = file_score(self.integrity)
-        overall = overall_score(topics, fscore, self.cfg)
+        overall = overall_score(topics, fscore, self.cfg, duration_s=self.t_end)
         verdict = verdict_for(overall, fscore, self.cfg)
 
         return HealthReport(
@@ -285,6 +397,185 @@ class Auditor:
             caveats=build_caveats(findings, topics, self.integrity),
             provenance=prov,
         )
+
+
+def _sustained_hz(cad: TopicCadence) -> float:
+    """The rate this topic actually held across its own lifetime.
+
+    Measured between its first and last message rather than over the whole recording, so
+    a topic that starts late or dies early is judged on the span it was alive for.
+    """
+    if cad.first_t is None or cad.last_t is None or cad.count < 2:
+        return 0.0
+    span = cad.last_t - cad.first_t
+    return cad.count / span if span > 0 else 0.0
+
+
+def _unassessable_reason(cad: TopicCadence, cfg: Config) -> str | None:
+    """Why this topic cannot support a rate model, or None if it can.
+
+    Two ways a topic has no cadence to measure, and both were producing findings:
+
+    * **sparse** — warmup never completed, so no baseline was ever established. The
+      auditor still hands out a `provisional_period` during warmup so that a topic dying
+      early is not missed, but for a topic that publishes five times in the whole
+      recording that provisional value is a median over a couple of samples. On real
+      flights `/home_position` (5 messages) and `/vehicle_command_ack` (7) were being
+      scored on it, and one of them then set `min()` for the entire report.
+    * **aperiodic** — warmup completed, but the learned rate is far above the rate the
+      topic actually sustained. Event-driven topics arrive in bursts, so the modal
+      inter-arrival is the spacing *inside* a burst.
+
+    Either way the honest answer is that we cannot assess the topic, not that it failed.
+    """
+    if not cad.ready:
+        return "sparse"
+    expected = cad.expected_hz
+    sustained = _sustained_hz(cad)
+    if not expected or sustained <= 0:
+        return None
+    if expected > cfg.cadence.aperiodic_ratio * sustained:
+        return "aperiodic"
+    return None
+
+
+def _aperiodic_finding(topic: str, cad: TopicCadence, t_end: float, reason: str) -> Finding:
+    sustained = _sustained_hz(cad)
+    span = (cad.last_t or 0.0) - (cad.first_t or 0.0)
+    if reason == "sparse":
+        summary = (
+            f"{topic} published {cad.count} times in {span:.1f}s — too few to establish "
+            f"a rate"
+        )
+        interpretation = (
+            "no baseline was ever established for this topic, so rate, gap and "
+            "dropped-message checks are skipped. Its silences are not evidence of loss: "
+            "with this few messages there is no way to tell an event-driven topic from a "
+            "failing one, and claiming either would be a guess"
+        )
+        rule = f"warmup never completed ({cad.count} < {CONFIG.cadence.warmup_messages} messages)"
+    else:
+        summary = (
+            f"{topic} has no stable publication rate — {cad.count} messages over "
+            f"{span:.1f}s, arriving in bursts"
+        )
+        interpretation = (
+            "this is an event-driven topic, not a broken one: it publishes when "
+            "something happens rather than on a schedule. Rate, gap and dropped-message "
+            "checks are skipped for it because a period learned from burst spacing would "
+            "describe behaviour it never had. Its silences are not evidence of loss"
+        )
+        rule = f"modal_hz > {CONFIG.cadence.aperiodic_ratio} * (count / active_span)"
+
+    return Finding(
+        detector="aperiodic",
+        severity=Severity.INFO,
+        topic=topic,
+        t_start=cad.first_t or 0.0,
+        t_end=t_end,
+        summary=summary,
+        evidence={
+            "message_count": float(cad.count),
+            "sustained_hz": round(sustained, 4),
+            "modal_hz": round(cad.expected_hz or 0.0, 4),
+        },
+        confidence=0.9,
+        interpretation=interpretation,
+        rule=rule,
+    )
+
+
+def _aperiodic_health(
+    topic: str, st: TopicState, cad: TopicCadence, silent: float, stall_silent: float
+) -> TopicHealth:
+    """Report the topic honestly without a rate model, and without a score.
+
+    Scoring it 100 would claim it is healthy, which we cannot know. It is excluded from
+    the overall score instead, and `hz_source="aperiodic"` says why.
+    """
+    return TopicHealth(
+        topic=topic,
+        msg_type=st.msg_type,
+        count=cad.count,
+        expected_hz=None,
+        observed_hz=round(_sustained_hz(cad), 4),
+        hz_source="aperiodic",
+        jitter_cv=0.0,
+        gap_count=0,
+        max_gap_s=0.0,
+        total_silent_s=round(silent, 4),
+        stall_silent_s=round(stall_silent, 4),
+        estimated_dropped=0,
+        dropped_confidence=0.0,
+        score=100.0,
+    )
+
+
+def _overlap_seconds(gaps: list[Gap], windows: list[tuple[float, float]]) -> float:
+    """How much of this topic's silence fell inside a system-wide stall."""
+    if not windows or not gaps:
+        return 0.0
+    total = 0.0
+    for gap in gaps:
+        for lo, hi in windows:
+            overlap = min(gap.t_end, hi) - max(gap.t_start, lo)
+            if overlap > 0:
+                total += overlap
+    return total
+
+
+#: a gap this far inside a stall window is the stall, not a separate event
+_ROLLUP_CONTAINMENT = 0.8
+
+
+def _roll_up_stall_gaps(
+    findings: list[Finding], stall_windows: list[tuple[float, float]]
+) -> list[Finding]:
+    """Collapse per-topic gaps that a system-wide stall already explains.
+
+    When the recorder stops, every topic goes silent at once. Reporting that as one
+    finding per topic turned an ordinary flight into 900–3000 findings and buried the
+    single fact that mattered — the recorder stalled — under its own consequences.
+
+    The gaps are not discarded: the count and the affected topics move onto the stall
+    finding as evidence, which is where an engineer would look for them anyway. A gap
+    only partly inside a stall window survives on its own, because the part outside is
+    genuinely unexplained.
+    """
+    if not stall_windows:
+        return findings
+
+    absorbed: dict[tuple[float, float], list[str]] = {w: [] for w in stall_windows}
+    kept: list[Finding] = []
+    for f in findings:
+        if f.detector != "gap" or f.topic is None:
+            kept.append(f)
+            continue
+        span = f.t_end - f.t_start
+        target = None
+        if span > 0:
+            for lo, hi in stall_windows:
+                inside = min(f.t_end, hi) - max(f.t_start, lo)
+                if inside / span >= _ROLLUP_CONTAINMENT:
+                    target = (lo, hi)
+                    break
+        if target is None:
+            kept.append(f)
+        else:
+            absorbed[target].append(f.topic)
+
+    for f in kept:
+        if f.detector != "correlation" or f.topic is not None:
+            continue
+        topics = absorbed.get((f.t_start, f.t_end))
+        if not topics:
+            continue
+        f.evidence["gaps_rolled_up"] = float(len(topics))
+        f.interpretation += (
+            f". The {len(topics)} per-topic silences inside this window are this one "
+            f"event seen once per topic, and are reported here rather than separately"
+        )
+    return kept
 
 
 def _integrity_findings(fi: FileIntegrity, t_end: float, t0_epoch: float = 0.0) -> list[Finding]:

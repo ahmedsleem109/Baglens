@@ -24,7 +24,11 @@ def topic_score(
     # of seconds: five seconds missing from a two-minute run is a serious hole, and the
     # same five seconds in an eight-hour run is a hiccup.
     silence_budget = max(5.0, 0.05 * duration_s) if duration_s > 0 else 30.0
-    gap_penalty = min(1.0, th.total_silent_s / silence_budget) if th.total_silent_s else 0.0
+    # Only silence this topic is actually responsible for. Time lost to a system-wide
+    # stall is charged once, at the report level, instead of to every topic that
+    # happened to be running when the recorder stopped.
+    own_silence = max(0.0, th.total_silent_s - th.stall_silent_s)
+    gap_penalty = min(1.0, own_silence / silence_budget) if own_silence else 0.0
     drop_rate = 0.0
     if expected_total > 0 and th.count:
         drop_rate = min(1.0, th.estimated_dropped / max(th.count + th.estimated_dropped, 1))
@@ -50,13 +54,38 @@ def file_score(fi: FileIntegrity | None) -> float:
     return fi.score if fi is not None else 100.0
 
 
-def overall_score(topics: list[TopicHealth], fscore: float, cfg: Config | None = None) -> float:
+def overall_score(
+    topics: list[TopicHealth],
+    fscore: float,
+    cfg: Config | None = None,
+    duration_s: float = 0.0,
+) -> float:
+    """Blend the worst topic, the average topic, file integrity — then charge shared
+    stalls once.
+
+    Per-topic scores deliberately ignore system-wide stalls (see `topic_score`), so the
+    cost of the recorder stopping is applied here instead, in proportion to how much of
+    the recording it swallowed. Losing 5% of a flight to logger stalls is normal on real
+    hardware and should dent the score; losing 40% should dominate it.
+    """
     cfg = cfg or CONFIG
     w = cfg.score
     if not topics:
         return fscore
-    scores = [t.score for t in topics]
-    return w.a_min * min(scores) + w.b_mean * (sum(scores) / len(scores)) + w.c_file * fscore
+    # Aperiodic topics carry no rate model, so their score is a placeholder rather than
+    # a judgement. Including them would let an unassessable topic set `min()` — which is
+    # weighted at 0.5 — and decide the verdict for the whole recording.
+    assessed = [t for t in topics if t.hz_source != "aperiodic"]
+    scores = [t.score for t in assessed] or [t.score for t in topics]
+    base = w.a_min * min(scores) + w.b_mean * (sum(scores) / len(scores)) + w.c_file * fscore
+
+    if duration_s > 0:
+        # The stall cost the whole recording, so take the worst-affected topic rather
+        # than an average that a hundred quiet topics would dilute away.
+        stalled = max((t.stall_silent_s for t in topics), default=0.0)
+        fraction = min(1.0, stalled / duration_s)
+        base *= 1.0 - w.w_stall * fraction
+    return max(0.0, base)
 
 
 def verdict_for(overall: float, fscore: float, cfg: Config | None = None) -> str:

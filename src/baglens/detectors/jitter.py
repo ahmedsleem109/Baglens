@@ -10,6 +10,8 @@ Target: recall >= 0.80 on injected jitter, precision >= 0.85.
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..config import CONFIG, Config
 from ..models import Finding, Severity
 from .base import RollingWelford
@@ -116,3 +118,36 @@ class JitterDetector:
         # already counts it
         own = 0 if self.window is self.cadence.cv_window else 8 * self.cfg.jitter.window
         return own + 96
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        # When the window is the cadence estimator's, it is *the same object*, not a
+        # copy: `on_arrival` skips pushing because the cadence already did. Persisting
+        # it here would restore two independent windows, silently double-counting every
+        # inter-arrival after the checkpoint. Record the sharing instead of the data.
+        shared = self.window is self.cadence.cv_window
+        return {
+            "topic": self.topic,
+            "shared_window": shared,
+            "window": None if shared else self.window.to_state(),
+            "episode_start": self._episode_start,
+            "peak_cv": self._peak_cv,
+            "max_cv": self.max_cv,
+            "findings": [f.model_dump(mode="json") for f in self._findings],
+        }
+
+    @classmethod
+    def from_state(
+        cls, state: dict[str, Any], cadence: TopicCadence, cfg: Config | None = None
+    ) -> JitterDetector:
+        obj = cls(str(state["topic"]), cadence, cfg)
+        if state["shared_window"]:
+            obj.window = cadence.cv_window
+        else:
+            obj.window = RollingWelford.from_state(state["window"])
+        obj._episode_start = state["episode_start"]
+        obj._peak_cv = float(state["peak_cv"])
+        obj.max_cv = float(state["max_cv"])
+        obj._findings = [Finding.model_validate(f) for f in state["findings"]]
+        return obj

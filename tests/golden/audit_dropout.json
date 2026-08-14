@@ -272,7 +272,8 @@
         "expected_hz": 10.069,
         "gap_based": 81.0,
         "noise_floor": 0.02,
-        "observed_count": 819.0
+        "observed_count": 819.0,
+        "stall_silent_s": 0.0
       },
       "id": "613e4663",
       "interpretation": "drops are clustered \u2014 consistent with a sensor or node outage; the gap list shows exactly when",
@@ -371,6 +372,7 @@
       "msg_type": "sensor_msgs/msg/CompressedImage",
       "observed_hz": 30.022,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/camera/image_raw",
       "total_silent_s": 0.0
     },
@@ -386,6 +388,7 @@
       "msg_type": "geometry_msgs/msg/Twist",
       "observed_hz": 20.003,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/cmd_vel",
       "total_silent_s": 0.0
     },
@@ -401,6 +404,7 @@
       "msg_type": "sensor_msgs/msg/Imu",
       "observed_hz": 99.995,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/imu/data",
       "total_silent_s": 0.0
     },
@@ -416,6 +420,7 @@
       "msg_type": "nav_msgs/msg/Odometry",
       "observed_hz": 50.005,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/odom",
       "total_silent_s": 0.0
     },
@@ -424,13 +429,14 @@
       "dropped_confidence": 0.942,
       "estimated_dropped": 86,
       "expected_hz": 10.07,
-      "gap_count": 0,
+      "gap_count": 1,
       "hz_source": "modal",
       "jitter_cv": 0.019,
       "max_gap_s": 8.098,
       "msg_type": "sensor_msgs/msg/LaserScan",
       "observed_hz": 10.01,
       "score": 66.7,
+      "stall_silent_s": 0.0,
       "topic": "/scan",
       "total_silent_s": 8.098
     }

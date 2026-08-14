@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..models import Finding
 
@@ -45,31 +45,55 @@ class Welford:
     def cv(self) -> float:
         return self.std / self.mean if self.mean > 0 else 0.0
 
+    def to_state(self) -> dict[str, Any]:
+        return {"n": self.n, "mean": self.mean, "m2": self.m2}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> Welford:
+        obj = cls()
+        obj.n = int(state["n"])
+        obj.mean = float(state["mean"])
+        obj.m2 = float(state["m2"])
+        return obj
+
 
 class RollingWelford:
-    """Welford over a fixed window. State: window floats + 3 scalars.
+    """Welford over a fixed window. State: window floats + 4 scalars.
 
-    Recomputes from the ring on eviction rather than using the numerically
-    unstable subtract-the-old-sample trick — the window is small (200) and
-    correctness beats cleverness in a detector nobody can eyeball.
+    Sums are accumulated **shifted by the first sample in the window**, because the
+    naive form is numerically unstable exactly where this class is used. Inter-arrival
+    times cluster tightly around a large-ish value (a 200 Hz topic gives 0.005 s but a
+    slow one gives 5 s), so ``sumsq`` and ``sum^2/n`` end up nearly equal and their
+    difference loses most of its significant digits. On a perfectly regular topic that
+    produced a variance of ~1e-12 instead of 0 — a phantom jitter floor in a detector
+    whose whole job is to notice small changes in variance.
+
+    Shifting costs one extra float and makes a constant window return exactly zero.
     """
 
-    __slots__ = ("window", "buf", "_sum", "_sumsq")
+    __slots__ = ("window", "buf", "_sum", "_sumsq", "_offset")
 
     def __init__(self, window: int) -> None:
         self.window = window
         self.buf: deque[float] = deque(maxlen=window)
         self._sum = 0.0
         self._sumsq = 0.0
+        self._offset = 0.0
 
     def push(self, x: float) -> None:
-        if len(self.buf) == self.window:
-            old = self.buf[0]
+        if not self.buf:
+            # Re-anchor on the first sample so the shifted values stay near zero.
+            self._offset = x
+            self._sum = 0.0
+            self._sumsq = 0.0
+        elif len(self.buf) == self.window:
+            old = self.buf[0] - self._offset
             self._sum -= old
             self._sumsq -= old * old
         self.buf.append(x)
-        self._sum += x
-        self._sumsq += x * x
+        shifted = x - self._offset
+        self._sum += shifted
+        self._sumsq += shifted * shifted
 
     @property
     def n(self) -> int:
@@ -77,7 +101,7 @@ class RollingWelford:
 
     @property
     def mean(self) -> float:
-        return self._sum / self.n if self.n else 0.0
+        return self._sum / self.n + self._offset if self.n else 0.0
 
     @property
     def variance(self) -> float:
@@ -94,6 +118,27 @@ class RollingWelford:
     def cv(self) -> float:
         m = self.mean
         return self.std / m if m > 0 else 0.0
+
+    def to_state(self) -> dict[str, Any]:
+        # The ring is the state — the running sums are derived and are restored with
+        # it rather than trusted, so a checkpoint cannot carry rounding drift forward.
+        # The offset travels too: re-deriving it from `buf[0]` would give a *different*
+        # anchor than the live object (whose anchor may since have been evicted), and
+        # the restored sums would then differ in the last bits from the uninterrupted
+        # run — which the identical-findings checkpoint test would catch.
+        return {"window": self.window, "buf": list(self.buf), "offset": self._offset}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> RollingWelford:
+        obj = cls(int(state["window"]))
+        obj._offset = float(state.get("offset", 0.0))
+        for x in state["buf"]:
+            value = float(x)
+            obj.buf.append(value)
+            shifted = value - obj._offset
+            obj._sum += shifted
+            obj._sumsq += shifted * shifted
+        return obj
 
 
 class Ewma:
@@ -113,6 +158,16 @@ class Ewma:
         else:
             self.value += self.alpha * (x - self.value)
         return self.value
+
+    def to_state(self) -> dict[str, Any]:
+        return {"alpha": self.alpha, "value": self.value, "n": self.n}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> Ewma:
+        obj = cls(float(state["alpha"]))
+        obj.value = float(state["value"])
+        obj.n = int(state["n"])
+        return obj
 
 
 class LogHistogram:
@@ -148,6 +203,17 @@ class LogHistogram:
         i = max(range(self.bins), key=self.counts.__getitem__)
         step = (math.log(self.hi) - self._log_lo) / self.bins
         return math.exp(self._log_lo + step * (i + 0.5))
+
+    def to_state(self) -> dict[str, Any]:
+        return {"bins": self.bins, "lo": self.lo, "hi": self.hi,
+                "counts": list(self.counts), "total": self.total}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> LogHistogram:
+        obj = cls(int(state["bins"]), float(state["lo"]), float(state["hi"]))
+        obj.counts = [int(c) for c in state["counts"]]
+        obj.total = int(state["total"])
+        return obj
 
 
 def theil_sen(xs: list[float], ys: list[float]) -> float:
@@ -215,4 +281,14 @@ class Detector(Protocol):
 
     def state_bytes(self) -> int:
         """Approximate resident state, asserted against the 2 KB/topic edge budget."""
+        ...
+
+    def to_state(self) -> dict[str, Any]:
+        """The whole detector as JSON-safe data.
+
+        "Fixed-size struct, serialisable, so it can be checkpointed" is a claim this
+        library makes about itself; this is where it is paid for. A restored detector
+        must produce byte-identical findings to one that never stopped — which is what
+        ``tests/integration/test_checkpoint.py`` asserts by splitting a recording.
+        """
         ...

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass
+from typing import Any
 
 from ..config import CONFIG, Config
 from ..models import Finding, Severity
@@ -160,3 +161,44 @@ class GapDetector:
 
     def state_bytes(self) -> int:
         return 48 * min(len(self._heap), self.cfg.gap.max_gaps) + 64
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        # ``_last`` is the still-open gap held back for merging. Flushing it here to
+        # simplify serialisation would change the result: the next arrival could still
+        # extend it, and a checkpoint that splits a gap in two reports two events where
+        # an uninterrupted run reports one.
+        return {
+            "topic": self.topic,
+            "heap": [_gap_state(g) for g in self._heap],
+            "last": _gap_state(self._last) if self._last is not None else None,
+            "total_silent": self.total_silent,
+            "max_gap": self.max_gap,
+            "gap_count": self.gap_count,
+            "dropped_gaps": self.dropped_gaps,
+        }
+
+    @classmethod
+    def from_state(
+        cls, state: dict[str, Any], cadence: TopicCadence, cfg: Config | None = None
+    ) -> GapDetector:
+        obj = cls(str(state["topic"]), cadence, cfg)
+        obj._heap = [_gap_from(s) for s in state["heap"]]
+        heapq.heapify(obj._heap)
+        obj._last = _gap_from(state["last"]) if state["last"] is not None else None
+        obj.total_silent = float(state["total_silent"])
+        obj.max_gap = float(state["max_gap"])
+        obj.gap_count = int(state["gap_count"])
+        obj.dropped_gaps = int(state["dropped_gaps"])
+        return obj
+
+
+def _gap_state(g: Gap) -> dict[str, Any]:
+    return {"topic": g.topic, "t_start": g.t_start, "t_end": g.t_end,
+            "expected_period": g.expected_period}
+
+
+def _gap_from(s: dict[str, Any]) -> Gap:
+    return Gap(str(s["topic"]), float(s["t_start"]), float(s["t_end"]),
+               float(s["expected_period"]))

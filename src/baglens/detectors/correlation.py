@@ -17,6 +17,7 @@ State: one pruned interval list per topic, bounded to the 60 s window.
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 from ..config import CONFIG, Config
 from ..models import Finding, GapDetail, Severity
@@ -139,21 +140,35 @@ class CorrelationDetector:
             )
         return details
 
-    def finalize(self, t_end: float) -> list[Finding]:
-        out: list[Finding] = []
+    def merged_stalls(self) -> list[SilentInterval]:
+        """The system-wide stalls, merged into one interval per event.
+
+        Exposed rather than kept inside `finalize` because the auditor needs these
+        windows *before* it scores topics: a topic silenced by a shared stall should not
+        be billed for it, and the per-topic gaps inside one are evidence for that single
+        event rather than findings of their own.
+        """
         c = self.cfg.correlation
-        # report the stalls, not every isolated gap — D2 already owns those
         stalls = [r for r in self.results if r.concurrency > c.system_wide]
         merged: list[SilentInterval] = []
         for r in sorted(stalls, key=lambda r: r.start):
             if merged and r.start <= merged[-1].end + 0.5:
                 merged[-1].end = max(merged[-1].end, r.end)
-                merged[-1].co_silent = sorted(set(merged[-1].co_silent) | {r.topic} | set(r.co_silent))
+                merged[-1].co_silent = sorted(
+                    set(merged[-1].co_silent) | {r.topic} | set(r.co_silent)
+                )
             else:
                 copy = SilentInterval(r.topic, r.start, r.end)
                 copy.concurrency = r.concurrency
                 copy.co_silent = sorted(set(r.co_silent) | {r.topic})
                 merged.append(copy)
+        return merged
+
+    def finalize(self, t_end: float) -> list[Finding]:
+        out: list[Finding] = []
+        c = self.cfg.correlation
+        # report the stalls, not every isolated gap — D2 already owns those
+        merged = self.merged_stalls()
 
         for r in merged[:50]:
             out.append(
@@ -213,3 +228,43 @@ class CorrelationDetector:
 
     def state_bytes(self) -> int:
         return sum(64 * len(dq) for dq in self.window.values()) + 128
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        # Every interval in `window` is the *same object* as one in `results` — a merge
+        # extends `dq[-1]` in place and the result must be visible through both. Storing
+        # the two independently would restore twins that drift apart on the next merge,
+        # so `results` is canonical and `window` keeps indices into it.
+        index = {id(iv): i for i, iv in enumerate(self.results)}
+        return {
+            "results": [_interval_state(iv) for iv in self.results],
+            "window": {tp: [index[id(iv)] for iv in dq] for tp, dq in self.window.items()},
+            "first_seen": dict(self.first_seen),
+            "last_seen": dict(self.last_seen),
+        }
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any], cfg: Config | None = None) -> CorrelationDetector:
+        obj = cls(cfg)
+        obj.results = [_interval_from(s) for s in state["results"]]
+        obj.window = {
+            tp: deque(obj.results[i] for i in idxs) for tp, idxs in state["window"].items()
+        }
+        obj.first_seen = {k: float(v) for k, v in state["first_seen"].items()}
+        obj.last_seen = {k: float(v) for k, v in state["last_seen"].items()}
+        return obj
+
+
+def _interval_state(iv: SilentInterval) -> dict[str, Any]:
+    return {"topic": iv.topic, "start": iv.start, "end": iv.end,
+            "concurrency": iv.concurrency, "co_silent": list(iv.co_silent),
+            "classification": iv.classification}
+
+
+def _interval_from(s: dict[str, Any]) -> SilentInterval:
+    iv = SilentInterval(str(s["topic"]), float(s["start"]), float(s["end"]))
+    iv.concurrency = float(s["concurrency"])
+    iv.co_silent = [str(x) for x in s["co_silent"]]
+    iv.classification = str(s["classification"])
+    return iv

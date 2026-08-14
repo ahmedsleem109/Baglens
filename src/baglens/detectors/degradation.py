@@ -16,6 +16,7 @@ Target: detect a 30%-over-10-minutes degradation with recall >= 0.85.
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 from ..config import CONFIG, Config
 from ..models import Finding, Severity
@@ -145,3 +146,34 @@ class RateDegradationDetector:
 
     def state_bytes(self) -> int:
         return 8 * self.cfg.degradation.n_buckets + 96
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        return {
+            "topic": self.topic,
+            "ewma": self.ewma.to_state(),
+            "bucket_hz": list(self.bucket_hz),
+            "bucket_index": self._bucket_index,
+            "t_origin": self._t_origin,
+            "bucket_end": self._bucket_end,
+            "episode": list(self._episode) if self._episode is not None else None,
+            "findings": [f.model_dump(mode="json") for f in self._findings],
+        }
+
+    @classmethod
+    def from_state(
+        cls, state: dict[str, Any], cadence: TopicCadence, cfg: Config | None = None
+    ) -> RateDegradationDetector:
+        obj = cls(str(state["topic"]), cadence, cfg)
+        obj.ewma = Ewma.from_state(state["ewma"])
+        obj.bucket_hz = deque(
+            (float(x) for x in state["bucket_hz"]), maxlen=obj.cfg.degradation.n_buckets
+        )
+        obj._bucket_index = int(state["bucket_index"])
+        obj._t_origin = state["t_origin"]
+        obj._bucket_end = state["bucket_end"]
+        ep = state["episode"]
+        obj._episode = (float(ep[0]), float(ep[1]), float(ep[2])) if ep is not None else None
+        obj._findings = [Finding.model_validate(f) for f in state["findings"]]
+        return obj

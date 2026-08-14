@@ -25,11 +25,19 @@ class DroppedEstimator:
         cadence: TopicCadence,
         gap: GapDetector | None,
         cfg: Config | None = None,
+        stall_silent_s: float = 0.0,
     ) -> None:
         self.topic = topic
         self.cadence = cadence
         self.gap = gap
         self.cfg = cfg or CONFIG
+        #: seconds this topic spent inside a *system-wide* stall. Excluded from active
+        #: duration: when the recorder stops, no topic was given the chance to publish,
+        #: so counting the difference as that topic's loss blames it for someone else's
+        #: failure. Real recordings are full of 2–5 s correlated stalls that never reach
+        #: CRITICAL, which is why the existing CRITICAL-only exclusion was not enough —
+        #: it left every topic on a normal flight looking ~8% lossy.
+        self.stall_silent_s = stall_silent_s
         self._last: tuple[int, float] | None = None
         self._parts: dict[str, float] = {}
 
@@ -48,8 +56,16 @@ class DroppedEstimator:
                 else:
                     gap_based += max(0, int(round(g.duration * hz)) - 1)
 
-        active = max(t_end - cad.first_t - critical_silent, 1e-9)
+        # Stall time may already be inside `critical_silent`; take the larger rather
+        # than the sum so a long stall is never excluded twice.
+        excluded = max(critical_silent, self.stall_silent_s)
+        active = max(t_end - cad.first_t - excluded, 1e-9)
         count_based = max(0, int(round(hz * active)) - cad.count)
+
+        # The same argument applies to the gap-based estimate: messages missing because
+        # the recorder stopped are not this topic's drops.
+        if self.stall_silent_s > 0:
+            gap_based = max(0, gap_based - int(round(self.stall_silent_s * hz)))
 
         denom = max(count_based, gap_based, 1)
         confidence = 1.0 - abs(count_based - gap_based) / denom
@@ -59,7 +75,8 @@ class DroppedEstimator:
             "expected_hz": round(hz, 4),
             "active_duration_s": round(active, 3),
             "observed_count": float(cad.count),
-            "excluded_silent_s": round(critical_silent, 3),
+            "excluded_silent_s": round(excluded, 3),
+            "stall_silent_s": round(self.stall_silent_s, 3),
         }
         dropped = max(count_based, gap_based)
         expected_total = hz * active

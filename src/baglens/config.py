@@ -43,6 +43,17 @@ class CadenceConfig:
     #: median is taken over inter-arrivals within +/- this fraction of the modal bin
     mode_refine_frac: float = 0.25
     ring_size: int = 50
+    #: A topic is treated as having no cadence when its learned rate exceeds the rate it
+    #: actually sustained across its own lifetime by this factor. Event-driven topics
+    #: (`/event`, `/sensor_selection`, `/vehicle_command_ack`) publish in bursts, so the
+    #: modal inter-arrival describes the spacing *inside* a burst — on real PX4 logs that
+    #: produced learned rates 500–34000x the true one, and every rate-based detector then
+    #: fired on a topic that was behaving perfectly.
+    #:
+    #: 5.0 is deliberately far above anything a real fault produces: an 8s dropout in a
+    #: 90s recording moves this ratio to ~1.1, and a topic silent for half its life only
+    #: reaches ~2.0, so genuine gaps are never mistaken for aperiodicity.
+    aperiodic_ratio: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -130,10 +141,16 @@ class ScoreConfig:
     w_drop: float = 0.35
     w_jitter: float = 0.20
     w_degradation: float = 0.15
-    #: overall = a*min(topic) + b*mean(topic) + c*file
+    #: overall = (a*min(topic) + b*mean(topic) + c*file) * (1 - w_stall * stalled_fraction)
     a_min: float = 0.5
     b_mean: float = 0.3
     c_file: float = 0.2
+    #: How hard a system-wide stall hits the overall score, as a multiplier on the
+    #: fraction of the recording it consumed. Charged once here rather than per topic.
+    #: Calibrated against 103 public PX4 flights: those lose a mean 4–8% of recording
+    #: time to logger stalls and must still read `usable_with_caveats`, while a
+    #: recording that spends half its length stalled must not.
+    w_stall: float = 2.5
     trustworthy: float = 85.0
     usable: float = 60.0
 

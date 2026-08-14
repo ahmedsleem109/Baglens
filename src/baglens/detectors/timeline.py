@@ -10,6 +10,8 @@ column count stays bounded and the width is reported alongside.
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..models import Timeline
 from ..provenance import Provenance
 
@@ -84,3 +86,22 @@ class TimelineAccumulator:
 
     def state_bytes(self) -> int:
         return 8 * self.max_cols * len(self.rows) + 64
+
+    # -- checkpoint --------------------------------------------------------
+
+    def to_state(self) -> dict[str, Any]:
+        # `bucket_s` has to travel with the rows: it is the resolution they were built
+        # at, and restoring rows against the default width would misplace every column.
+        return {
+            "max_cols": self.max_cols,
+            "bucket_s": self.bucket_s,
+            "rows": {tp: list(row) for tp, row in self.rows.items()},
+            "t_end": self.t_end,
+        }
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> TimelineAccumulator:
+        obj = cls(int(state["max_cols"]), float(state["bucket_s"]))
+        obj.rows = {tp: [int(v) for v in row] for tp, row in state["rows"].items()}
+        obj.t_end = float(state["t_end"])
+        return obj

@@ -295,6 +295,7 @@
       "msg_type": "sensor_msgs/msg/CompressedImage",
       "observed_hz": 30.008,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/camera/image_raw",
       "total_silent_s": 0.0
     },
@@ -310,6 +311,7 @@
       "msg_type": "geometry_msgs/msg/Twist",
       "observed_hz": 19.998,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/cmd_vel",
       "total_silent_s": 0.0
     },
@@ -325,6 +327,7 @@
       "msg_type": "sensor_msgs/msg/Imu",
       "observed_hz": 100.013,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/imu/data",
       "total_silent_s": 0.0
     },
@@ -340,6 +343,7 @@
       "msg_type": "nav_msgs/msg/Odometry",
       "observed_hz": 50.001,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/odom",
       "total_silent_s": 0.0
     },
@@ -355,6 +359,7 @@
       "msg_type": "sensor_msgs/msg/LaserScan",
       "observed_hz": 10.0,
       "score": 100.0,
+      "stall_silent_s": 0.0,
       "topic": "/scan",
       "total_silent_s": 0.0
     }

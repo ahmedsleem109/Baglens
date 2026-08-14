@@ -1,15 +1,6 @@
 {
   "caveats": [
-    "/camera/image_raw was silent between t=40.0\u201346.0s; do not compute rates, counts, or coverage over that window.",
-    "/camera/image_raw lost ~7% of its messages; any per-message statistic on this topic is biased and detection-rate style metrics are invalid.",
-    "/imu/data was silent between t=40.0\u201346.0s; do not compute rates, counts, or coverage over that window.",
-    "/imu/data lost ~7% of its messages; any per-message statistic on this topic is biased and detection-rate style metrics are invalid.",
-    "/odom was silent between t=40.0\u201346.0s; do not compute rates, counts, or coverage over that window.",
-    "/odom lost ~7% of its messages; any per-message statistic on this topic is biased and detection-rate style metrics are invalid.",
-    "/scan was silent between t=40.0\u201346.1s; do not compute rates, counts, or coverage over that window.",
-    "/scan lost ~7% of its messages; any per-message statistic on this topic is biased and detection-rate style metrics are invalid.",
-    "At least one silence was system-wide, so it reflects the recording host rather than any sensor; do not attribute those windows to a specific subsystem.",
-    "1 topics scored clean and were omitted from the per-topic list."
+    "At least one silence was system-wide, so it reflects the recording host rather than any sensor; do not attribute those windows to a specific subsystem."
   ],
   "clock": {
     "backward_jump_times": [],
@@ -273,10 +264,11 @@
       "evidence": {
         "concurrency": 0.75,
         "duration_s": 6.104,
+        "gaps_rolled_up": 4.0,
         "topics_silent": 4.0
       },
       "id": "017c4281",
-      "interpretation": "everything went quiet at once, so this is the recorder, the disk, the CPU, or power \u2014 not a sensor. Looking at any single topic here will send you down the wrong path: /camera/image_raw, /imu/data, /odom, /scan",
+      "interpretation": "everything went quiet at once, so this is the recorder, the disk, the CPU, or power \u2014 not a sensor. Looking at any single topic here will send you down the wrong path: /camera/image_raw, /imu/data, /odom, /scan. The 4 per-topic silences inside this window are this one event seen once per topic, and are reported here rather than separately",
       "provenance": {
         "method": "concurrency > 0.7 over a 60.0s window",
         "mission_id": "<volatile>",
@@ -296,39 +288,6 @@
       "t_end": 46.07,
       "t_start": 39.966,
       "topic": null
-    },
-    {
-      "confidence": 1.0,
-      "detector": "gap",
-      "evidence": {
-        "duration_s": 6.025,
-        "estimated_lost_messages": 300.0,
-        "expected_period_s": 0.02,
-        "periods_missed": 300.7
-      },
-      "id": "dcb4756c",
-      "interpretation": "the sensor or node stopped publishing, or the recorder stalled \u2014 check health.find_gaps for co-silent topics to tell which",
-      "provenance": {
-        "method": "dt > max(5.0 * expected_period, 0.25s)",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          39.989,
-          46.014
-        ],
-        "topics": [
-          "/odom"
-        ],
-        "warnings": []
-      },
-      "rule": "dt > max(5.0 * expected_period, 0.25s)",
-      "severity": 3,
-      "summary": "/odom silent for 6.03s (301x its 49.9 Hz period)",
-      "t_end": 46.014,
-      "t_start": 39.989,
-      "topic": "/odom"
     },
     {
       "confidence": 0.7,
@@ -359,266 +318,11 @@
       "t_end": 46.014,
       "t_start": 39.989,
       "topic": "/odom"
-    },
-    {
-      "confidence": 1.0,
-      "detector": "gap",
-      "evidence": {
-        "duration_s": 6.041,
-        "estimated_lost_messages": 181.0,
-        "expected_period_s": 0.033,
-        "periods_missed": 182.1
-      },
-      "id": "e3a21c6b",
-      "interpretation": "the sensor or node stopped publishing, or the recorder stalled \u2014 check health.find_gaps for co-silent topics to tell which",
-      "provenance": {
-        "method": "dt > max(5.0 * expected_period, 0.25s)",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          39.989,
-          46.03
-        ],
-        "topics": [
-          "/camera/image_raw"
-        ],
-        "warnings": []
-      },
-      "rule": "dt > max(5.0 * expected_period, 0.25s)",
-      "severity": 3,
-      "summary": "/camera/image_raw silent for 6.04s (182x its 30.1 Hz period)",
-      "t_end": 46.03,
-      "t_start": 39.989,
-      "topic": "/camera/image_raw"
-    },
-    {
-      "confidence": 1.0,
-      "detector": "gap",
-      "evidence": {
-        "duration_s": 6.01,
-        "estimated_lost_messages": 600.0,
-        "expected_period_s": 0.01,
-        "periods_missed": 600.9
-      },
-      "id": "9b17f5ba",
-      "interpretation": "the sensor or node stopped publishing, or the recorder stalled \u2014 check health.find_gaps for co-silent topics to tell which",
-      "provenance": {
-        "method": "dt > max(5.0 * expected_period, 0.25s)",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          39.995,
-          46.005
-        ],
-        "topics": [
-          "/imu/data"
-        ],
-        "warnings": []
-      },
-      "rule": "dt > max(5.0 * expected_period, 0.25s)",
-      "severity": 3,
-      "summary": "/imu/data silent for 6.01s (601x its 100.0 Hz period)",
-      "t_end": 46.005,
-      "t_start": 39.995,
-      "topic": "/imu/data"
-    },
-    {
-      "confidence": 0.938,
-      "detector": "dropped",
-      "evidence": {
-        "active_duration_s": 89.999,
-        "agreement": 0.938,
-        "count_based": 193.0,
-        "drop_rate": 0.071,
-        "estimated_dropped": 193.0,
-        "excluded_silent_s": 0.0,
-        "expected_hz": 30.147,
-        "gap_based": 181.0,
-        "noise_floor": 0.02,
-        "observed_count": 2520.0
-      },
-      "id": "7179f4f0",
-      "interpretation": "drops are clustered \u2014 consistent with a sensor or node outage; the gap list shows exactly when",
-      "provenance": {
-        "method": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          0.0,
-          89.999
-        ],
-        "topics": [
-          "/camera/image_raw"
-        ],
-        "warnings": []
-      },
-      "rule": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-      "severity": 2,
-      "summary": "/camera/image_raw is missing ~193 messages (7.1% of expected)",
-      "t_end": 89.999,
-      "t_start": 0.0,
-      "topic": "/camera/image_raw"
-    },
-    {
-      "confidence": 0.997,
-      "detector": "dropped",
-      "evidence": {
-        "active_duration_s": 89.997,
-        "agreement": 0.997,
-        "count_based": 602.0,
-        "drop_rate": 0.067,
-        "estimated_dropped": 602.0,
-        "excluded_silent_s": 0.0,
-        "expected_hz": 100.0,
-        "gap_based": 600.0,
-        "noise_floor": 0.02,
-        "observed_count": 8398.0
-      },
-      "id": "d6415529",
-      "interpretation": "drops are clustered \u2014 consistent with a sensor or node outage; the gap list shows exactly when",
-      "provenance": {
-        "method": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          0.003,
-          89.999
-        ],
-        "topics": [
-          "/imu/data"
-        ],
-        "warnings": []
-      },
-      "rule": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-      "severity": 2,
-      "summary": "/imu/data is missing ~602 messages (6.7% of expected)",
-      "t_end": 89.999,
-      "t_start": 0.003,
-      "topic": "/imu/data"
-    },
-    {
-      "confidence": 0.967,
-      "detector": "dropped",
-      "evidence": {
-        "active_duration_s": 89.993,
-        "agreement": 0.967,
-        "count_based": 290.0,
-        "drop_rate": 0.067,
-        "estimated_dropped": 300.0,
-        "excluded_silent_s": 0.0,
-        "expected_hz": 49.905,
-        "gap_based": 300.0,
-        "noise_floor": 0.02,
-        "observed_count": 4201.0
-      },
-      "id": "949a0354",
-      "interpretation": "drops are clustered \u2014 consistent with a sensor or node outage; the gap list shows exactly when",
-      "provenance": {
-        "method": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          0.007,
-          89.999
-        ],
-        "topics": [
-          "/odom"
-        ],
-        "warnings": []
-      },
-      "rule": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-      "severity": 2,
-      "summary": "/odom is missing ~300 messages (6.7% of expected)",
-      "t_end": 89.999,
-      "t_start": 0.007,
-      "topic": "/odom"
-    },
-    {
-      "confidence": 0.967,
-      "detector": "dropped",
-      "evidence": {
-        "active_duration_s": 89.913,
-        "agreement": 0.967,
-        "count_based": 58.0,
-        "drop_rate": 0.067,
-        "estimated_dropped": 60.0,
-        "excluded_silent_s": 0.0,
-        "expected_hz": 9.988,
-        "gap_based": 60.0,
-        "noise_floor": 0.02,
-        "observed_count": 840.0
-      },
-      "id": "6c29364f",
-      "interpretation": "drops are clustered \u2014 consistent with a sensor or node outage; the gap list shows exactly when",
-      "provenance": {
-        "method": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          0.086,
-          89.999
-        ],
-        "topics": [
-          "/scan"
-        ],
-        "warnings": []
-      },
-      "rule": "count_based = expected_hz*active_duration - observed_count; gap_based = sum(round(gap*hz)-1); active excludes CRITICAL gaps",
-      "severity": 2,
-      "summary": "/scan is missing ~60 messages (6.7% of expected)",
-      "t_end": 89.999,
-      "t_start": 0.086,
-      "topic": "/scan"
-    },
-    {
-      "confidence": 1.0,
-      "detector": "gap",
-      "evidence": {
-        "duration_s": 6.104,
-        "estimated_lost_messages": 60.0,
-        "expected_period_s": 0.1,
-        "periods_missed": 61.0
-      },
-      "id": "8f844dec",
-      "interpretation": "the sensor or node stopped publishing, or the recorder stalled \u2014 check health.find_gaps for co-silent topics to tell which",
-      "provenance": {
-        "method": "dt > max(5.0 * expected_period, 0.25s)",
-        "mission_id": "<volatile>",
-        "partial": false,
-        "path": "<volatile>",
-        "sample_count": 17758,
-        "time_range": [
-          39.966,
-          46.07
-        ],
-        "topics": [
-          "/scan"
-        ],
-        "warnings": []
-      },
-      "rule": "dt > max(5.0 * expected_period, 0.25s)",
-      "severity": 2,
-      "summary": "/scan silent for 6.10s (61x its 10.0 Hz period)",
-      "t_end": 46.07,
-      "t_start": 39.966,
-      "topic": "/scan"
     }
   ],
   "mission_id": "<volatile>",
   "original_size": "<volatile>",
-  "overall_score": 76.0,
+  "overall_score": 83.0,
   "path": "<volatile>",
   "provenance": {
     "method": "single_pass_auditor(cadence,clock,correlation,dropped,file_integrity,gap,jitter,rate_degradation)",
@@ -641,69 +345,89 @@
       "this format records a single timestamp per message \u2014 recorder lag (D6b) is not measurable and the lag curve is flat by construction, not by health"
     ]
   },
-  "suggested_narrowing": "pass topics=[...] to audit a subset, or detectors=['gap','clock'] to run fewer checks",
+  "suggested_narrowing": null,
   "topics": [
     {
       "count": 2520,
-      "dropped_confidence": 0.938,
-      "estimated_dropped": 193,
+      "dropped_confidence": 0.0,
+      "estimated_dropped": 0,
       "expected_hz": 30.147,
-      "gap_count": 0,
+      "gap_count": 1,
       "hz_source": "modal",
       "jitter_cv": 0.021,
       "max_gap_s": 6.041,
       "msg_type": "sensor_msgs/msg/CompressedImage",
       "observed_hz": 30.015,
-      "score": 67.5,
+      "score": 100.0,
+      "stall_silent_s": 6.041,
       "topic": "/camera/image_raw",
       "total_silent_s": 6.041
     },
     {
-      "count": 8398,
-      "dropped_confidence": 0.997,
-      "estimated_dropped": 602,
-      "expected_hz": 100.0,
+      "count": 1799,
+      "dropped_confidence": 0.0,
+      "estimated_dropped": 0,
+      "expected_hz": 20.025,
       "gap_count": 0,
+      "hz_source": "modal",
+      "jitter_cv": 0.019,
+      "max_gap_s": 0.0,
+      "msg_type": "geometry_msgs/msg/Twist",
+      "observed_hz": 19.994,
+      "score": 100.0,
+      "stall_silent_s": 0.0,
+      "topic": "/cmd_vel",
+      "total_silent_s": 0.0
+    },
+    {
+      "count": 8398,
+      "dropped_confidence": 0.0,
+      "estimated_dropped": 0,
+      "expected_hz": 100.0,
+      "gap_count": 1,
       "hz_source": "qos",
       "jitter_cv": 0.019,
       "max_gap_s": 6.01,
       "msg_type": "sensor_msgs/msg/Imu",
       "observed_hz": 99.992,
-      "score": 67.7,
+      "score": 100.0,
+      "stall_silent_s": 6.01,
       "topic": "/imu/data",
       "total_silent_s": 6.01
     },
     {
       "count": 4201,
-      "dropped_confidence": 0.967,
-      "estimated_dropped": 300,
+      "dropped_confidence": 1.0,
+      "estimated_dropped": 0,
       "expected_hz": 49.905,
-      "gap_count": 0,
+      "gap_count": 1,
       "hz_source": "modal",
       "jitter_cv": 0.02,
       "max_gap_s": 6.025,
       "msg_type": "nav_msgs/msg/Odometry",
       "observed_hz": 50.031,
-      "score": 67.7,
+      "score": 100.0,
+      "stall_silent_s": 6.025,
       "topic": "/odom",
       "total_silent_s": 6.025
     },
     {
       "count": 840,
-      "dropped_confidence": 0.967,
-      "estimated_dropped": 60,
+      "dropped_confidence": 1.0,
+      "estimated_dropped": 0,
       "expected_hz": 9.988,
-      "gap_count": 0,
+      "gap_count": 1,
       "hz_source": "modal",
       "jitter_cv": 0.019,
       "max_gap_s": 6.104,
       "msg_type": "sensor_msgs/msg/LaserScan",
       "observed_hz": 10.023,
-      "score": 67.7,
+      "score": 100.0,
+      "stall_silent_s": 6.104,
       "topic": "/scan",
       "total_silent_s": 6.104
     }
   ],
-  "truncated": true,
+  "truncated": false,
   "verdict": "usable_with_caveats"
 }

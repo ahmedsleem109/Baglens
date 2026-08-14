@@ -50,11 +50,15 @@ class TopicHealth(BaseModel):
     count: int = 0
     expected_hz: float | None = None
     observed_hz: float = 0.0
-    hz_source: Literal["qos", "modal", "declared", "unknown"] = "modal"
+    hz_source: Literal["qos", "modal", "declared", "unknown", "aperiodic"] = "modal"
     jitter_cv: float = 0.0
     gap_count: int = 0
     max_gap_s: float = 0.0
     total_silent_s: float = 0.0
+    #: of `total_silent_s`, the part that fell inside a system-wide stall. A topic
+    #: silenced because the whole recorder stopped did not fail, and is not scored or
+    #: billed for dropped messages as though it had.
+    stall_silent_s: float = 0.0
     estimated_dropped: int = 0
     dropped_confidence: float = 0.0
     score: float = 100.0
