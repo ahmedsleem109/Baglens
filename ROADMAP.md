@@ -1,22 +1,23 @@
 # Roadmap
 
-**State: Phases 0–7 shipped. Tier 0 (verification debt) and Tier 1 (completeness) are
-done. Tier 2 and Tier 3 remain.**
+**State: Phases 0–7 shipped. Tier 0 and Tier 1 done. Tier 0.1 landed — the detectors have
+now been scored against real flights with labels nobody here wrote. Tier 3.2 landed.**
 
-Current numbers: 43 tools, 115 tests + 2 skipped, `ruff` and `mypy --strict` green,
-eight detectors at 1.000 precision/recall with zero false positives on 40 clean bags,
-56 tool-surface eval cases passing at 0.67% uncited claims.
+Current numbers: 43 tools, 143 tests + 2 skipped, `ruff` and `mypy` green,
+eight detectors at 1.000 precision/recall on synthetic faults with zero false positives
+on 20 clean bags, 56 tool-surface eval cases passing at 0.67% uncited claims, and
+**recall 1.000 / precision 0.861 against PX4's own dropout records** across six real
+flights (`evals/integrity/REAL_DATA.md`).
 
 ---
 
 ## Start here next session
 
-1. **Tier 0.1 — the real finding.** Everything in Tier 2 depends on it and nothing else
-   is blocked by anything. Details below.
-2. **Tier 3.2 — checkpoint/restore**, which is small, self-contained, and closes the last
-   claim the README makes that the code does not back up.
-3. **Tier 2.1 — model-in-the-loop evals**, which needs an API key and is the headline
-   artifact for Phase 6.
+1. **Tier 2.1 — model-in-the-loop evals.** Built and tested against a scripted client;
+   needs an API key to produce real numbers. Headline artifact for Phase 6.
+2. **Tier 2.2 — the README demo.** Now recordable: there is a real finding to show, and
+   the tool no longer cries wolf on the recording you would demo it against.
+3. **Tier 2.3 — ship it.** Requires a human: PyPI, the blog post, ROS Discourse.
 
 Do not start Tier 3.1/3.3 (live source, live-tail) before the offline product has users.
 
@@ -73,47 +74,141 @@ depending on when you looked, which the golden snapshots caught immediately.
 
 ---
 
-## Tier 0.1 — Find a real problem in data nobody here made ⭐ STILL OPEN
+## Tier 0.1 — Find a real problem in data nobody here made ✅ DONE
 
-**The Phase 2 definition of done, and the only item that converts the precision/recall
-table from a regression gate into a credible claim.** The current numbers come from a
-generator in this repository, so perfect scores mean the detectors and the generator
-agree about what a fault looks like. The README says so; that honesty has a shelf life.
+**What landed.** `scripts/fetch_px4.py` pulls from review.px4.io (~447k public flights;
+the dead Foxglove URL in `fetch_public_data.sh` is replaced). `scripts/audit_corpus.py`
+audits and ranks a directory. `evals/integrity/real_data.py` scores the result.
 
-- Pull a few hundred public recordings: Foxglove samples, PX4 flight logs
-  (review.px4.io — thousands of real flights *with real failures*), ROS 2 datasets on
-  Hugging Face. `scripts/fetch_public_data.sh` is the starting point; the Foxglove URL in
-  it 404s and needs replacing.
-- `catalog.add_source`, then `compare.rank_missions(metric="health_score")`.
-- Manually inspect the twenty worst. Confirm or dismiss each finding by hand.
-- Both outcomes are publishable: a real bug is the blog post; everything clean is a
-  genuinely low false-positive rate, and you go looking at messier sources (ROS Discourse
-  "help, my bag is weird" threads are the goldmine).
+The find that mattered was not a bug in someone's recording — it is that **ULog files
+carry the logger's own dropout records**, so PX4 flights are a public corpus of real
+failures *with real labels*. That is the thing the synthetic generator can never provide,
+and it turns the precision/recall table into a field measurement:
 
-**Done when:** one confirmed, previously-unreported integrity problem in a public
-dataset, written up with the lag curve or timeline that shows it.
+- **Recall 1.000, precision 0.861** for `correlation` against 100 labelled dropouts over
+  six distinct flights (60 minutes).
+- Verified independently of baglens, from raw pyulog timestamps: **6.8–8.4% of every
+  flight's duration is a total logging blackout** — intervals where not one of ~115
+  topics produced a sample. Individual blackouts run 2–5.5s. A sensor fault cannot
+  silence every topic at once, so these are recorder stalls; PX4's own dropout totals
+  agree to within 1% (29.39s recorded vs 29.1s observed; 67.10s vs 66.5s).
+- Corpus hygiene: review.px4.io serves the same flight under several UUIDs — 3 of the
+  first 9 files were byte-identical. Both the fetcher and the eval now dedupe by content
+  hash. Left in, one popular flight silently dominates every statistic.
 
-**Also still open from Tier 0.2:** install the `ulog` extra and audit a real `.ulg`. The
-reader is written and typed; nothing has ever opened a PX4 log. Either prove it or narrow
-the README's four-format claim to three.
+**And the failure it exposed**, which is the more valuable half: all six flights audit as
+`compromised` (47–56) against a 0.000 false-positive rate on synthetic clean bags. Each
+stall is reported once per topic instead of once per event, so an ordinary flight yields
+900–3000 findings. See Tier 1.5 — no longer deferred.
+
+One caveat kept deliberately: PX4 logger dropouts are a known phenomenon to PX4
+developers, and this does not claim to have discovered them. What is new here is the
+systematic quantification, and the fact that they make a free labelled benchmark.
+
+**Tier 0.2 `.ulg` — closed.** `pyulog` installed, real flight logs opened end to end:
+123 topics, 921k messages, 384k msg/s, no out-of-order arrivals. The README's format
+claim is back to four, with an explicit note that CI does not cover `.ulg` because there
+is no small fixture.
+
+Not done, and deliberately: the ROS Discourse "my bag is weird" sweep. PX4 turned out to
+be a better source than expected and it is a natural next corpus, not a prerequisite.
 
 ---
 
+## Tier 1.5 — Score calibration and finding aggregation ✅ DONE
+
+Was "deferred with Tier 0.1; it needs real recordings." It got them, and they showed the
+problem was reporting rather than detection. On a 25-flight sample the verdict
+distribution moved from **0 trustworthy / 0 usable / 25 compromised** to **4 / 12 / 9**,
+median findings per flight from ~1000 to ~40, while all eight detectors stayed at
+1.000/1.000 on the synthetic gate.
+
+Four changes, each with the evidence that motivated it:
+
+- **One stall, one finding.** `_roll_up_stall_gaps` collapses per-topic gaps contained in
+  a system-wide stall onto that stall's finding, carrying the count and topic list as
+  evidence. A gap only *partly* inside the window survives, because the part outside is
+  genuinely unexplained.
+- **Shared stalls are not the topic's fault.** `TopicHealth.stall_silent_s` separates
+  silence caused by the recorder stopping from the topic's own. `DroppedEstimator` no
+  longer bills it (the old CRITICAL-only exclusion missed the common 2–5s case, which is
+  why every topic looked ~8% lossy), and `topic_score` no longer penalises it.
+- **The stall is charged once, at the report level.** `w_stall` (2.5) scales the overall
+  score by the fraction of the recording lost, instead of every topic paying for the same
+  event. Calibrated so the synthetic 6s-of-90s stall reads `usable_with_caveats` and a
+  flight that spends 30%+ stalled reads `compromised`.
+- **Topics with no cadence are not measured against one.** `_unassessable_reason` marks a
+  topic `sparse` (warmup never completed — `/home_position`, 5 messages) or `aperiodic`
+  (modal rate > 5× the rate it ever sustained — `/event`, bursts). Both get an INFO
+  finding saying so, and are excluded from the score instead of setting its `min()`.
+
+The last one mattered most: it was worth more than the stall work, because a single
+5-message topic scoring zero was setting `min()`, which carries weight 0.5.
+
+**Deliberately not done:** re-tuning `trustworthy`/`usable` thresholds. The verdict now
+tracks how much recording was actually lost, so moving the thresholds would only hide the
+flights that genuinely are compromised.
+
+The problem, precisely: a recorder stall silences ~115 topics at once, and the auditor
+emits a `gap` finding for each of them plus a `dropped` finding for each topic whose
+count now looks short. One event becomes hundreds of findings. Then `overall_score`
+averages topic scores that have each been penalised for the same event, and every real
+flight lands in `compromised`.
+
+Not a threshold problem — retuning `k` would only trade these false alarms for missed
+real gaps, and the gap detector scores 1.000/1.000 against PX4's own labels. It is a
+*reporting* problem:
+
+- When `correlation` classifies a window as a system-wide stall, the per-topic gaps
+  inside it are evidence for that one finding, not findings in their own right. Roll them
+  up; keep the co-silent list, which is already the diagnosis.
+- `dropped` must not bill a topic for messages lost to a stall that was not its fault —
+  `active_duration` excludes CRITICAL gaps but not the far more common 2–5s ones.
+- The score needs a real-world anchor. "6.8% of recording time lost to logger stalls" is
+  *normal* for a PX4 flight on an SD card; a verdict scale on which normal reads as
+  `compromised` is measuring the wrong thing.
+- The 4.6% of serious findings that sit on topics whose learned rate is 500–34000× what
+  the topic ever sustained (`/event`, `/sensor_selection`, `/vehicle_command_ack` — event
+  driven topics with no cadence at all) are a genuine false-positive class. The cadence
+  baseline should decline to produce a rate for a topic that has no cadence, rather than
+  learning one from the spacing inside a burst. Bounded-state test available:
+  `count / span` versus `expected_hz`.
+
+**Done when:** a clean real flight reads `usable_with_caveats` or better, one stall
+produces one finding, and `evals/integrity/real_data.py` still shows recall ≥ 0.95.
+
 ## Tier 2 — Launch
 
-### 2.1 Model-in-the-loop evals ⭐
+### 2.1 Model-in-the-loop evals ⭐ BUILT — needs an API key to produce numbers
 
-`evals/runner.py` scores reference tool sequences deterministically (56 cases, no API
-calls, CI-safe). The interesting number — and what makes this legible to ML engineers
-rather than only roboticists — is what a model actually does with the surface.
+The `--model` path exists: `evals/model_loop.py` converts the live MCP tool list into
+Anthropic tool definitions, runs the real agentic loop, and records the trajectory;
+`evals/runner.py --model` scores it and writes a model report.
 
-The harness, the four scoring axes and the cases already exist. What is missing is the
-`--model` path: hand the question and the live tool surface to an LLM, run the tool loop,
-and score the trajectory on correctness, tool-call efficiency, token consumption and
-uncited claims. Then publish `evals/RESULTS.md` across several models.
+```bash
+uv sync --extra evals
+export ANTHROPIC_API_KEY=...
+uv run python -m evals.runner --model claude-opus-5 --out evals/RESULTS.md
+```
 
-Note `evals/scoring.py` already computes hallucination rate from provenance coverage;
-that is the axis nobody else publishes.
+Deliberate choices worth keeping:
+
+- **Assertions are checked against every tool result the model collected**, not the last
+  one. A model that reaches the evidence by another route has still done the job;
+  scoring against the reference ordering would measure obedience, not competence.
+- **A fifth axis the deterministic path cannot measure:** *unsupported figures* —
+  decimals and large integers in the model's prose that appear in no tool result it
+  received, after allowing for rounding. Provenance coverage scores the tools' output;
+  this scores whether the answer stayed anchored to it.
+- **The tool schemas come from `server.list_tools()`**, never a hand-written copy, so a
+  confusing description shows up in the score instead of being papered over.
+- **13 tests cover the loop with a scripted client** — dispatch, token accounting, tool
+  failures, `refusal`, `pause_turn`, turn bounding, and the scoring wiring. No API key,
+  no network, runs in CI. The mock does not pretend to measure a model; it stops the
+  loop's own bugs being discovered on the one run that costs money.
+
+**Still open:** running it. That needs a key and real spend, so it is a human's call —
+then publish `evals/RESULTS.md` across several models.
 
 ### 2.2 The README demo
 
@@ -142,13 +237,27 @@ with an MCAP tail (a file being written) before touching rclpy: it needs no ROS 
 and proves the same thing. `tests/synth/generate.py::write_growing` already produces the
 fixture.
 
-### 3.2 Checkpoint and restore
+### 3.2 Checkpoint and restore ✅ DONE
 
-Detector state is described throughout as "a fixed-size struct, serialisable, so it can be
-checkpointed". The sizes are asserted; the serialisation does not exist. Implement
-`to_state()` / `from_state()` per detector plus a round-trip test that splits a recording
-in half and proves identical findings. Small, self-contained, and it closes the last
-unbacked claim in the README.
+`to_state()` / `from_state()` on every online primitive, every detector and the auditor
+itself, with `tests/integration/test_checkpoint.py` splitting recordings at 25/50/75%
+across all eight fault classes and asserting *identical* findings, topic health and
+score — through real JSON, not a dict copy.
+
+Three things were only visible once the state had to leave the process:
+
+- The jitter detector's variance window **is** the cadence estimator's, by identity, and
+  `on_arrival` relies on that to avoid double-pushing. Serialising it would have restored
+  two independent windows that double-count every inter-arrival after a checkpoint. The
+  state records the sharing, not the data.
+- `CorrelationDetector.window` and `.results` hold the same `SilentInterval` objects, and
+  a merge mutates through both. `results` is now canonical and `window` stores indices.
+- `t0` has to travel with the checkpoint. A resumed pass that re-derives it from its own
+  first arrival shifts the entire second half of the timeline — which is what the
+  negative control in the sanity check confirmed.
+
+`Auditor.run()` is now `push()` per arrival plus `finish()`, which is also the shape
+Tier 3.1's live source needs.
 
 ### 3.3 Live-tail catalog
 

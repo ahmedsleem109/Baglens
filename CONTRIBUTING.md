@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/yourname/baglens && cd baglens
+git clone https://github.com/ahmedsleem109/Baglens && cd baglens
 uv sync --dev
 uv run pytest -q
 ```

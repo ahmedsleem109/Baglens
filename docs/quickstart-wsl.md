@@ -29,7 +29,7 @@ sudo apt update && sudo apt install -y build-essential git curl pkg-config \
 curl -LsSf https://astral.sh/uv/install.sh | sh
 exec $SHELL
 
-git clone https://github.com/yourname/baglens ~/dev/baglens
+git clone https://github.com/ahmedsleem109/Baglens ~/dev/baglens
 cd ~/dev/baglens && uv sync
 uv run pytest -q
 ```

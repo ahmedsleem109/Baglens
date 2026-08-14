@@ -1,7 +1,7 @@
 # Detector precision and recall
 
-Corpus: **160 faulted** + **40 clean** synthetic bags, 120s each, seed-deterministic.
-Matching tolerance: ±2s. Generated 2026-08-13.
+Corpus: **80 faulted** + **20 clean** synthetic bags, 90s each, seed-deterministic.
+Matching tolerance: ±2s. Generated 2026-08-14.
 
 | Detector | Precision | Recall | F1 | target P/R | FP per clean bag | verdict |
 |---|---|---|---|---|---|---|
@@ -14,6 +14,6 @@ Matching tolerance: ±2s. Generated 2026-08-13.
 | `correlation` | 1.000 | 1.000 | 1.000 | 0.80/0.85 | 0.000 | PASS |
 | `file_integrity` | 1.000 | 1.000 | 1.000 | 0.95/0.95 | 0.000 | PASS |
 
-Throughput: 1 MB/s across 200 bags (368 MB in 339.7s of audit time, 11 workers).
+Throughput: 1 MB/s across 100 bags (137 MB in 102.4s of audit time, 11 workers).
 
 **How to read this.** A fault counts as detected if the right detector fires with an overlapping window on the right topic. Findings that a different injected fault legitimately explains are not counted as false positives — a 12-second dropout really does drop messages, and penalising the auditor for saying so would measure the wrong thing. Findings on the clean control set are counted with no such leniency.

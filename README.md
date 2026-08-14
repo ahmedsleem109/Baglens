@@ -36,13 +36,16 @@ is the difference between "the camera failed" and "the recorder stalled". It cos
 ## Install
 
 ```bash
-uvx --from git+https://github.com/yourname/baglens baglens --stdio
+uvx --from git+https://github.com/ahmedsleem109/Baglens baglens --stdio
 ```
 
 No ROS installation required. `.mcap`, rosbag2 `.db3` and ROS 1 `.bag` are read in pure
 Python and each is covered by end-to-end tests that assert all three reach identical
-conclusions on the same recording. A PX4 `.ulg` reader ships behind the `ulog` extra but
-has not yet been run against a real flight log — treat it as unproven until it is.
+conclusions on the same recording. PX4 `.ulg` is read behind the `ulog` extra
+(`uv sync --extra ulog`) and has been audited end to end against real flight logs from
+review.px4.io — see [`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md). CI
+does not cover `.ulg`: there is no small fixture, because a real PX4 log is 70 MB and a
+synthetic one would only test our own assumptions again.
 
 ## Why this exists
 
@@ -82,15 +85,56 @@ matching rules are in [`evals/integrity/RESULTS.md`](evals/integrity/RESULTS.md)
 **Read that table with the appropriate scepticism.** These are synthetic faults from a
 generator in this repository. Perfect scores mean the detectors and the generator agree
 about what a fault looks like — they are a regression gate and a floor, not evidence of
-field accuracy. The number that would prove field accuracy is a real finding in someone
-else's data, and until that lands this table is the honest maximum claim.
+field accuracy.
+
+### The same detectors on real flights, against labels we did not write
+
+PX4's logger writes a dropout record into the `.ulg` whenever it could not keep up. That
+is ground truth authored by the flight controller, on hardware nobody here has touched.
+Scored against it across twelve distinct public flights from review.px4.io — 99 minutes,
+100 labelled dropouts:
+
+| | Recall | Precision | F1 |
+|---|---|---|---|
+| `correlation` vs. PX4's own dropout records | **1.000** | **0.832** | 0.908 |
+
+Every dropout the recorder admitted to was found. The precision gap is the honest half:
+on flights the logger marked clean, the detector still reports the occasional stall.
+Method, per-flight breakdown and what this does *not* measure are in
+[`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md).
+
+**What real data broke, and what fixed it.** The first run against those flights graded
+every single one `compromised`, at 47–56/100, with 900–3000 findings each — against a
+0.000 false-positive rate on synthetic bags. The detections were right; the *reporting*
+was wrong, in two ways:
+
+- **One stall was reported once per topic.** When the recorder stops, all ~115 topics go
+  silent together. That is one event, and it now produces one finding with the co-silent
+  topics as evidence — not 115 findings plus a dropped-message bill for every topic that
+  was never given the chance to publish.
+- **Topics with no cadence were measured against one anyway.** Event-driven topics
+  (`/home_position` with 5 messages, `/event` arriving in bursts) had a rate learned from
+  burst spacing — up to 2700× their real rate. Each then scored zero and set the
+  `min()` that dominates the overall score. They are now reported as unassessable, with
+  the reason, and excluded from the score rather than deciding it.
+
+On a 25-flight sample that moves the distribution from **0 trustworthy / 0 usable / 25
+compromised** to **4 / 12 / 9**, with the median finding count down from ~1000 to ~40.
+The nine still graded `compromised` lost a mean **31.5%** of their recording time to
+stalls, against 2.3% for the rest — the verdict now tracks damage rather than topic count.
+All eight detectors stay at 1.000/1.000 on the synthetic gate, so none of this was bought
+by detecting less.
 
 ## The health score, in the open
 
 ```
 topic_score = 100 · (1 − 0.30·gap_penalty − 0.35·drop_rate
                          − 0.20·jitter_excess − 0.15·degradation)
-overall     = 0.5·min(topic_scores) + 0.3·mean(topic_scores) + 0.2·file_score
+
+overall     = (0.5·min(scores) + 0.3·mean(scores) + 0.2·file_score)
+              · (1 − 2.5·stalled_fraction)
+
+              where `scores` covers only topics we can actually assess
 
 ≥85 trustworthy   ·   60–85 usable with caveats   ·   <60 compromised
 ```
@@ -98,7 +142,21 @@ overall     = 0.5·min(topic_scores) + 0.3·mean(topic_scores) + 0.2·file_score
 Weighting the *minimum* heavily is deliberate: one broken critical topic compromises an
 investigation regardless of how healthy the other forty are. `gap_penalty` is measured
 against 5% of the recording's length, so five missing seconds matter in a two-minute run
-and not in an eight-hour one. Every constant lives in `config.py` and is overridable.
+and not in an eight-hour one.
+
+Two terms exist because of what real flights did to the first version of this formula:
+
+- **`stalled_fraction`** is the share of the recording lost to system-wide stalls, and it
+  is charged **once**, here. `gap_penalty` deliberately ignores that silence, because
+  charging every topic for the same stall punished a 115-topic vehicle 115 times for one
+  event.
+- **Topics we cannot assess are excluded, not scored.** A topic that never completed
+  warmup, or whose modal rate exceeds the rate it ever sustained by 5×, has no rate model
+  to be measured against. They are listed with `hz_source: "aperiodic"` and a reason —
+  letting a 5-message event topic set a `min()` weighted at 0.5 was, on its own, most of
+  why every real recording read as `compromised`.
+
+Every constant lives in `config.py` and is overridable.
 
 ## The streaming constraint
 
@@ -183,7 +241,7 @@ Use the **absolute path** to `uv`: WSL non-login shells often lack `~/.local/bin
   "mcpServers": {
     "baglens": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/yourname/baglens",
+      "args": ["--from", "git+https://github.com/ahmedsleem109/Baglens",
                "baglens", "--stdio", "--root", "/home/YOU/data"]
     }
   }
@@ -222,7 +280,7 @@ Ready-made copies live in [`examples/`](examples/).
 ## Development
 
 ```bash
-git clone https://github.com/yourname/baglens && cd baglens
+git clone https://github.com/ahmedsleem109/Baglens && cd baglens
 uv sync
 uv run pytest -q                                    # 115 tests
 uv run python -m tests.synth.generate --matrix --out /tmp/bags

@@ -7,7 +7,7 @@
     "baglens": {
       "command": "uvx",
       "args": [
-        "--from", "git+https://github.com/yourname/baglens",
+        "--from", "git+https://github.com/ahmedsleem109/Baglens",
         "baglens", "--stdio",
         "--root", "/home/YOU/data",
         "--sensitivity", "normal"
