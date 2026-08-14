@@ -1,6 +1,6 @@
 # Tool reference
 
-`baglens` 0.2.0 — **43 tools** across 10 namespaces.
+`baglens` 0.2.0 — **44 tools** across 10 namespaces.
 
 Every tool returns a typed Pydantic model. Every result that reports on data
 carries a `provenance` object naming the recording, the topics, the time range and
@@ -338,6 +338,29 @@ sensitivity when you want to know *why* something was flagged.
 |---|---|---|---|
 | `finding_id` | string | yes | |
 | `path` | union | no | `null` |
+
+### `health.explain_stalls`
+
+Test what, if anything, in this recording explains its recorder stalls.
+
+Call this after health.audit_recording reports a system-wide stall and you want
+the cause rather than the symptom. Each candidate signal is compared in the
+seconds before each stall against its own baseline elsewhere, and ranked by
+effect size.
+
+A signal is only reported as an explanation when it shifts *and* keeps shifting
+before most individual stalls. Expect `verdict="unexplained"` often — on public
+PX4 flight data neither CPU load nor message volume explains these stalls, and
+naming a cause anyway would be worse than saying so.
+
+`signals` are dotted `topic.field` paths (e.g. "cpuload.load"). Omit to try the
+usual suspects: CPU, RAM, supply voltage, and current draw.
+
+| parameter | type | required | default |
+|---|---|---|---|
+| `path` | string | yes | |
+| `signals` | union | no | `null` |
+| `sensitivity` | string | no | `"normal"` |
 
 ### `health.find_gaps`
 

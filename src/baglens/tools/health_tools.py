@@ -24,6 +24,17 @@ from ..models import (
 from ..provenance import Provenance
 from .common import audit, find_finding, resolve
 
+#: The signals worth trying when the caller doesn't name any. PX4 names on the left of
+#: the dot; a ROS 2 recording will simply miss them and report `no_data`, which is the
+#: correct answer rather than a failure.
+_DEFAULT_STALL_SIGNALS = (
+    "cpuload.load",
+    "cpuload.ram_usage",
+    "system_power.voltage5v_v",
+    "battery_status.current_a",
+    "battery_status.voltage_v",
+)
+
 
 class TopicQos(BaseModel):
     topic: str
@@ -51,6 +62,31 @@ class QosReport(BaseModel):
     issues: list[QosIssueModel] = Field(default_factory=list)
     topics_without_qos: list[str] = Field(default_factory=list)
     verdict: str = ""
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
+class AttributionModel(BaseModel):
+    signal: str
+    effect_size: float
+    consistency: float = 0.0
+    stalls_tested: int = 0
+    pre_mean: float = 0.0
+    baseline_mean: float = 0.0
+    direction: str = ""
+    explains: bool = False
+    summary: str = ""
+
+
+class StallExplanation(BaseModel):
+    stall_count: int = 0
+    total_silent_s: float = 0.0
+    pattern: str = "unknown"
+    dispersion: float = 0.0
+    pattern_summary: str = ""
+    verdict: str = ""
+    interpretation: str = ""
+    signals_tested: int = 0
+    candidates: list[AttributionModel] = Field(default_factory=list)
     provenance: Provenance = Field(default_factory=Provenance)
 
 
@@ -184,6 +220,95 @@ def register(mcp: Any) -> None:
                 f"min_duration_s or topic= to narrow, or continuation_token to page on."
             )
         return out
+
+    @mcp.tool(name="health.explain_stalls")
+    def explain_stalls(
+        path: str,
+        signals: list[str] | None = None,
+        sensitivity: Literal["low", "normal", "high"] = "normal",
+    ) -> StallExplanation:
+        """Test what, if anything, in this recording explains its recorder stalls.
+
+        Call this after health.audit_recording reports a system-wide stall and you want
+        the cause rather than the symptom. Each candidate signal is compared in the
+        seconds before each stall against its own baseline elsewhere, and ranked by
+        effect size.
+
+        A signal is only reported as an explanation when it shifts *and* keeps shifting
+        before most individual stalls. Expect `verdict="unexplained"` often — on public
+        PX4 flight data neither CPU load nor message volume explains these stalls, and
+        naming a cause anyway would be worse than saying so.
+
+        `signals` are dotted `topic.field` paths (e.g. "cpuload.load"). Omit to try the
+        usual suspects: CPU, RAM, supply voltage, and current draw.
+        """
+        from ..kernels.attribution import StallAttributor
+
+        report, auditor = audit(path, None, None, sensitivity)
+        stalls = [
+            (f.t_start, f.t_end)
+            for f in report.findings
+            if f.detector == "correlation" and "system-wide" in f.summary
+        ]
+        prov = Provenance(
+            mission_id=report.mission_id,
+            path=str(resolve(path)),
+            method="stall_attribution(pre_window=3s, guard=5s, cohens_d + per-stall consistency)",
+            time_range=(0.0, report.duration_s),
+        )
+        if not stalls:
+            return StallExplanation(
+                verdict="no_stalls",
+                interpretation=(
+                    "No system-wide stall was detected in this recording, so there is "
+                    "nothing to attribute. Per-topic gaps are listed by health.find_gaps"
+                ),
+                provenance=prov,
+            )
+
+        attributor = StallAttributor(stalls, duration_s=report.duration_s)
+        wanted = signals or _DEFAULT_STALL_SIGNALS
+        reader = auditor.reader
+        available = {t.topic.lstrip("/") for t in report.topics}
+        tested = 0
+        for spec in wanted:
+            topic, _, field_path = spec.partition(".")
+            if not field_path or topic.lstrip("/") not in available:
+                continue
+            try:
+                for t_ns, value in reader.numeric_field(f"/{topic.lstrip('/')}", field_path):
+                    attributor.feed(spec, t_ns / 1e9 - (auditor.t0 or 0.0), value)
+                tested += 1
+            except Exception:  # noqa: BLE001 - a missing field is not an error here
+                continue
+
+        result = attributor.report()
+        out = StallExplanation(
+            stall_count=result.pattern.count,
+            total_silent_s=round(result.pattern.total_silent_s, 3),
+            pattern=result.pattern.kind,
+            dispersion=round(result.pattern.dispersion, 3),
+            pattern_summary=result.pattern.summary(),
+            verdict=result.verdict,
+            interpretation=result.interpretation,
+            signals_tested=tested,
+            candidates=[
+                AttributionModel(
+                    signal=a.signal,
+                    effect_size=a.effect_size,
+                    consistency=a.consistency,
+                    stalls_tested=a.stalls_tested,
+                    pre_mean=a.pre_mean,
+                    baseline_mean=a.baseline_mean,
+                    direction=a.direction,
+                    explains=a.explains,
+                    summary=a.summary(),
+                )
+                for a in result.attributions[:10]
+            ],
+            provenance=prov,
+        )
+        return apply_budget(out)
 
     @mcp.tool(name="health.qos_report")
     def qos_report(path: str) -> QosReport:
