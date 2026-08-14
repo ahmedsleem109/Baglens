@@ -20,24 +20,32 @@ fetch() {
 echo "destination: $DEST"
 echo
 
-# Foxglove sample recordings — small, well-formed, ideal fixtures.
-fetch "https://assets.foxglove.dev/nuScenes-v1.0-mini-scene-0061.mcap" \
-      "nuscenes-mini-scene-0061.mcap" || echo "  (skipped: URL unavailable)"
+# The Foxglove sample assets that used to live here are gone — assets.foxglove.dev
+# now answers "Not found" for both nuScenes-v1.0-mini-scene-0061.mcap and demo.mcap.
+# The MCAP project's own test corpus is small but stays put:
+fetch "https://github.com/foxglove/mcap/raw/main/testdata/mcap/demo.mcap" \
+      "mcap-demo.mcap" || echo "  (skipped: URL unavailable)"
+
+# PX4 public flight logs — the source that actually matters.
+# ~450k real flights with real failures, and each ULog carries the logger's own
+# dropout records, which makes it the only public corpus with *labels we did not write*.
+echo
+echo "fetching PX4 flight logs (this is the corpus behind evals/integrity/REAL_DATA.md)"
+python3 "$(dirname "$0")/fetch_px4.py" --dest "$DEST/px4" --count "${PX4_COUNT:-120}" \
+        --budget-gb "${PX4_BUDGET_GB:-6}" || echo "  (skipped: PX4 fetch failed)"
 
 cat <<'NOTE'
 
-Two more sources worth pulling by hand, because both need a browse step:
-
-  * PX4 public flight logs — https://review.px4.io/browse
-    Thousands of real flights with real failures. Download a few .ulg files here;
-    baglens reads them with the `ulog` extra:  uv sync --extra ulog
+One more source worth pulling by hand, because it needs a browse step:
 
   * Hugging Face — search for `rosbag2` or `mcap` datasets.
 
-And the one that matters most for testing:
+Scoring against the PX4 corpus (needs the ulog extra: uv sync --extra ulog):
+
+  uv run python -m evals.integrity.real_data --dir ~/data/public/px4
+
+And the synthetic matrix, which is still the only source of labelled faults across
+all eight classes:
 
   uv run python -m tests.synth.generate --matrix --out ~/data/synthetic
-
-That is the only source of *labelled* failures, and therefore the backbone of every
-published number in this repository.
 NOTE
