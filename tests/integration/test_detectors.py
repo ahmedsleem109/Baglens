@@ -95,10 +95,15 @@ def test_rate_degradation_detected(degradation_bag: Path) -> None:
     report = audit(degradation_bag)
     hits = [f for f in report.findings if f.detector == "rate_degradation"]
     assert any(f.topic == "/odom" for f in hits)
+    assert len(hits) == len({f.topic for f in hits}), "one drifting topic is one finding"
     f = next(f for f in hits if f.topic == "/odom")
     assert f.evidence["relative_slope"] < 0  # it slowed
     assert abs(f.evidence["relative_slope"]) > 0.15
-    assert f.evidence["hz_last_bucket"] < f.evidence["hz_first_bucket"]
+    assert f.evidence["hz_at_end"] < f.evidence["hz_at_start"]
+    # The sentence must agree with the two rates it prints. It did not: a real Tesla CAN
+    # bus produced "sped up by 65% (1715.1 → 1650.3 Hz)", because the direction came from
+    # the episode's peak slope while the rates came from a ring that had moved on.
+    assert "slowed" in f.summary, f.summary
 
 
 def test_rate_degradation_ignores_a_single_gap(dropout_bag: Path) -> None:

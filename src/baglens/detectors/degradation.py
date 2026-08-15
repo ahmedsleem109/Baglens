@@ -39,7 +39,9 @@ class RateDegradationDetector:
         self._bucket_index = 0  # index of the next bucket to be closed
         self._t_origin: float | None = None
         self._bucket_end: float | None = None
-        self._episode: tuple[float, float, float] | None = None  # (t_start, rel_slope, tau)
+        #: (t_start, peak_rel_slope, tau, hz_at_start) — the rate at the start travels
+        #: with the episode because the bucket ring will have forgotten it by close time
+        self._episode: tuple[float, float, float, float] | None = None
         self._findings: list[Finding] = []
         self.threshold = d.rel_slope_by_sensitivity[self.cfg.sensitivity]
 
@@ -86,19 +88,30 @@ class RateDegradationDetector:
 
         firing = abs(rel) > self.threshold and p < d.tau_p_max
         if firing and self._episode is None:
-            self._episode = (xs[0], rel, tau)
+            # The rate at the episode's start is captured *now*, not read back from the
+            # ring at close time. The ring holds only the last `n_buckets`, so by the time
+            # an episode closes its oldest bucket may be from well after the trend began —
+            # which is how a finding came to read "sped up by 65% (1715.1 → 1650.3 Hz)" on
+            # a real Tesla CAN bus, its own numbers contradicting its sentence.
+            self._episode = (xs[0], rel, tau, ys[0])
         elif firing:
-            start, prev_rel, prev_tau = self._episode  # type: ignore[misc]
-            self._episode = (start, rel if abs(rel) > abs(prev_rel) else prev_rel, tau)
+            start, prev_rel, prev_tau, hz0 = self._episode  # type: ignore[misc]
+            self._episode = (start, rel if abs(rel) > abs(prev_rel) else prev_rel, tau, hz0)
         elif self._episode is not None:
             self._close(xs[-1])
 
     def _close(self, t_end: float) -> None:
         if self._episode is None:
             return
-        t_start, rel, tau = self._episode
+        t_start, rel, tau, hz0 = self._episode
         self._episode = None
-        direction = "slowed" if rel < 0 else "sped up"
+        hz1 = self.bucket_hz[-1] if self.bucket_hz else 0.0
+
+        # Severity comes from the strongest sustained trend seen during the episode, which
+        # is what the detector actually fired on. The *sentence* is derived from the two
+        # rates it prints, so it can never contradict them — a trend that reverses inside
+        # one episode is real and is still reported, but it is described by where the rate
+        # ended up rather than by its steepest moment.
         pct = abs(rel) * 100.0
         sev = (
             Severity.HIGH
@@ -107,8 +120,40 @@ class RateDegradationDetector:
             if pct >= 20
             else Severity.LOW
         )
-        hz0 = self.bucket_hz[0] if self.bucket_hz else 0.0
-        hz1 = self.bucket_hz[-1] if self.bucket_hz else 0.0
+        net = (hz1 - hz0) / hz0 if hz0 else 0.0
+        direction = "slowed" if net < 0 else "sped up"
+        net_pct = abs(net) * 100.0
+        # Severity tracks the steepest sustained trend, the sentence tracks the net move.
+        # When those disagree the reader deserves to know why they are looking at a HIGH
+        # finding that says "slowed by 4%" — the rate swung and came back.
+        swing = (
+            f", peaking at {pct:.0f}% within the window"
+            if pct >= 20 and pct >= 2 * net_pct
+            else ""
+        )
+
+        # One drifting topic is one finding. The trend is measured over a sliding window,
+        # so a rate that wobbles across the threshold closes an episode and opens another
+        # covering much the same ground: a real Tesla CAN bus produced two findings for
+        # one drift, both starting at 5.0s, differing only in where they stopped. Extend
+        # the previous one instead — the same roll-up the stall detector already does.
+        if self._findings and self._findings[-1].t_end >= t_start:
+            prior = self._findings[-1]
+            prior.t_end = max(prior.t_end, t_end)
+            prior.severity = max(prior.severity, sev)
+            # Recompute against the *merged* window's own endpoints, or the sentence would
+            # describe this episode while printing the combined span's rates.
+            start_hz = float(prior.evidence["hz_at_start"])
+            merged = (hz1 - start_hz) / start_hz if start_hz else 0.0
+            prior.summary = (
+                f"{self.topic} {'slowed' if merged < 0 else 'sped up'} by "
+                f"{abs(merged) * 100:.0f}% over {prior.t_end - prior.t_start:.0f}s "
+                f"({start_hz:.1f} → {hz1:.1f} Hz){swing}"
+            )
+            prior.evidence["hz_at_end"] = round(hz1, 3)
+            prior.evidence["episodes"] = prior.evidence.get("episodes", 1.0) + 1.0
+            return
+
         self._findings.append(
             Finding(
                 detector="rate_degradation",
@@ -117,14 +162,16 @@ class RateDegradationDetector:
                 t_start=t_start,
                 t_end=t_end,
                 summary=(
-                    f"{self.topic} {direction} by {pct:.0f}% over "
-                    f"{t_end - t_start:.0f}s ({hz0:.1f} → {hz1:.1f} Hz)"
+                    f"{self.topic} {direction} by {net_pct:.0f}% over "
+                    f"{t_end - t_start:.0f}s ({hz0:.1f} → {hz1:.1f} Hz){swing}"
                 ),
                 evidence={
                     "relative_slope": round(rel, 4),
+                    "peak_trend_pct": round(pct, 1),
+                    "net_change_pct": round(net_pct, 1),
                     "kendall_tau": round(tau, 3),
-                    "hz_first_bucket": round(hz0, 3),
-                    "hz_last_bucket": round(hz1, 3),
+                    "hz_at_start": round(hz0, 3),
+                    "hz_at_end": round(hz1, 3),
                     "buckets": float(len(self.bucket_hz)),
                 },
                 confidence=min(1.0, abs(tau)),
@@ -174,6 +221,11 @@ class RateDegradationDetector:
         obj._t_origin = state["t_origin"]
         obj._bucket_end = state["bucket_end"]
         ep = state["episode"]
-        obj._episode = (float(ep[0]), float(ep[1]), float(ep[2])) if ep is not None else None
+        # tolerate a checkpoint written before hz_at_start joined the episode
+        obj._episode = (
+            (float(ep[0]), float(ep[1]), float(ep[2]),
+             float(ep[3]) if len(ep) > 3 else 0.0)
+            if ep is not None else None
+        )
         obj._findings = [Finding.model_validate(f) for f in state["findings"]]
         return obj
