@@ -125,6 +125,11 @@ def build_caveats(
         if f.topic:
             by_topic.setdefault(f.topic, []).append(f)
 
+    #: topics whose only distinguishing feature is their name. The gap and dropped
+    #: caveats below each carry a window or a percentage, so they stay per-topic; this
+    #: one is the same sentence every time and a PX4 flight produces 49 of them.
+    rate_changed: list[str] = []
+
     for th in topics:
         fs = by_topic.get(th.topic, [])
         worst_gap = max((f for f in fs if f.detector == "gap"), key=lambda f: f.severity, default=None)
@@ -141,10 +146,19 @@ def build_caveats(
                     f"on this topic is biased and detection-rate style metrics are invalid."
                 )
         if any(f.detector == "rate_degradation" for f in fs):
-            out.append(
-                f"{th.topic} changed rate substantially during the recording; comparing its "
-                f"early and late behaviour without normalising by rate will mislead."
-            )
+            rate_changed.append(th.topic)
+
+    if rate_changed:
+        named = ", ".join(rate_changed[:8])
+        rest = len(rate_changed) - 8
+        if rest > 0:
+            named = f"{named}, and {rest} more"
+        subject = rate_changed[0] if len(rate_changed) == 1 else f"{len(rate_changed)} topics"
+        out.append(
+            f"{subject} changed rate substantially during the recording ({named}); "
+            f"comparing their early and late behaviour without normalising by rate "
+            f"will mislead."
+        )
 
     if any(f.detector == "clock" and f.severity >= Severity.CRITICAL for f in findings):
         out.append(

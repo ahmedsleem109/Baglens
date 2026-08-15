@@ -80,6 +80,10 @@ class Auditor:
         self.correlation: Any = None
         self.integrity: FileIntegrity | None = None
         self.timeline = TimelineAccumulator()
+        #: topic -> why it has no cadence to measure ("sparse" | "aperiodic"), filled in
+        #: by `_assemble`. The audit already drops these topics' rate-derived findings;
+        #: `health.find_gaps` reads this so it can make the same call.
+        self.unassessable: dict[str, str] = {}
 
     # -- the pass ----------------------------------------------------------
 
@@ -118,7 +122,25 @@ class Auditor:
         if "correlation" in self.enabled and self.correlation is None:
             from .correlation import CorrelationDetector
 
-            self.correlation = CorrelationDetector(self.cfg)
+            self.correlation = CorrelationDetector(
+                self.cfg, expected_topics=self._expected_topic_count()
+            )
+
+    def _expected_topic_count(self) -> int:
+        """How many topics this recording should carry — the correlation denominator.
+
+        Only topics the reader says carry messages count: a channel declared in the file
+        but never published can never be co-silent, and including it would permanently
+        depress concurrency. Readers that do not populate per-topic counts fall back to
+        the declared list, and a source that cannot enumerate topics at all returns 0,
+        which leaves the detector scoring against the topics it has seen.
+        """
+        topics = self.meta.topics
+        if self.topic_filter is not None:
+            wanted = set(self.topic_filter)
+            topics = [t for t in topics if t.topic in wanted]
+        with_messages = sum(1 for t in topics if t.count > 0)
+        return with_messages or len(topics)
 
     def push(self, arrival: Any) -> None:
         """Feed one arrival to every detector. The whole pass is this, in a loop."""
@@ -277,6 +299,7 @@ class Auditor:
 
         findings: list[Finding] = []
         topics: list[TopicHealth] = []
+        self.unassessable.clear()  # rebuilt below; `_assemble` must stay idempotent
 
         # System-wide stalls are resolved *first*, because everything below has to know
         # which silences were the recorder's fault rather than the topic's. Scoring a
@@ -295,6 +318,7 @@ class Auditor:
             )
             reason = _unassessable_reason(cad, self.cfg)
             if reason is not None:
+                self.unassessable[topic] = reason
                 # Every rate-based check downstream is derived from a period this topic
                 # never actually held, so none of their findings mean anything here.
                 findings.append(_aperiodic_finding(topic, cad, self.t_end, reason))

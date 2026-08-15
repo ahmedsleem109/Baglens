@@ -39,9 +39,12 @@ class SilentInterval:
 class CorrelationDetector:
     name = "correlation"
 
-    def __init__(self, cfg: Config | None = None) -> None:
+    def __init__(self, cfg: Config | None = None, expected_topics: int = 0) -> None:
         self.cfg = cfg or CONFIG
         self.k = self.cfg.gap.k_by_sensitivity[self.cfg.sensitivity]
+        #: how many topics the recording declares it will carry, 0 when unknown.
+        #: The denominator floor below; see `_score`.
+        self.expected_topics = expected_topics
         self.window: dict[str, deque[SilentInterval]] = {}
         self.first_seen: dict[str, float] = {}
         self.last_seen: dict[str, float] = {}
@@ -101,7 +104,16 @@ class CorrelationDetector:
             if overlap >= need:
                 co.append(tp)
         interval.co_silent = sorted(co)
-        interval.concurrency = len(co) / len(active_before)
+        # Floor the denominator on the topics the recording *declares*, not just the ones
+        # seen so far. A PX4 flight logs a reduced topic set before arming and starts the
+        # other ~105 at arm time; scored against only what had appeared, 11 co-silent
+        # topics out of the 14 known so far read as 0.79 — a "system-wide stall" covering
+        # 60% of the recording, on a flight whose own logger recorded 3.18s of dropout.
+        # `max` means this can only ever lower concurrency, and only while topics are
+        # still arriving: once everything has been seen the two denominators agree.
+        # 0 when the source cannot enumerate its topics, which restores the old behaviour.
+        denominator = max(len(active_before), self.expected_topics - 1)
+        interval.concurrency = len(co) / denominator if denominator else 0.0
         c = self.cfg.correlation
         interval.classification = (
             "system_wide_stall"
@@ -242,11 +254,14 @@ class CorrelationDetector:
             "window": {tp: [index[id(iv)] for iv in dq] for tp, dq in self.window.items()},
             "first_seen": dict(self.first_seen),
             "last_seen": dict(self.last_seen),
+            # travels with the checkpoint: a resumed pass sees only the topics in its own
+            # half, so re-deriving this would score the two halves on different scales
+            "expected_topics": self.expected_topics,
         }
 
     @classmethod
     def from_state(cls, state: dict[str, Any], cfg: Config | None = None) -> CorrelationDetector:
-        obj = cls(cfg)
+        obj = cls(cfg, expected_topics=int(state.get("expected_topics", 0)))
         obj.results = [_interval_from(s) for s in state["results"]]
         obj.window = {
             tp: deque(obj.results[i] for i in idxs) for tp, idxs in state["window"].items()
