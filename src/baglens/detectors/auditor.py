@@ -80,6 +80,8 @@ class Auditor:
         self.correlation: Any = None
         self.integrity: FileIntegrity | None = None
         self.timeline = TimelineAccumulator()
+        #: content-derived mission id, resolved on first report and then carried
+        self._mission_id: str | None = None
         #: topic -> why it has no cadence to measure ("sparse" | "aperiodic"), filled in
         #: by `_assemble`. The audit already drops these topics' rate-derived findings;
         #: `health.find_gaps` reads this so it can make the same call.
@@ -126,6 +128,24 @@ class Auditor:
                 self.cfg, expected_topics=self._expected_topic_count()
             )
 
+    #: `unassessable` is deliberately **not** applied to D7, and this is a measured
+    #: result rather than an oversight. It looks like the obvious fix for the phantom
+    #: stall on `nuway_stops` — a quiet shuttle bus reported as one 1,489-second
+    #: system-wide stall — and every version of it fails the only labelled corpus there
+    #: is. Scored over 105 PX4 flights against the logger's own dropout records:
+    #:
+    #:   | D7 rule                                   | recall | precision |
+    #:   |-------------------------------------------|--------|-----------|
+    #:   | unrestricted (shipped)                    | 1.000  | 0.943     |
+    #:   | no unassessable topic may create or vote  | 0.757  | 0.965     |
+    #:   | aperiodic may not create; anyone may vote | 0.783  | 0.927     |
+    #:   | aperiodic may not create or vote          | 0.750  | 0.965     |
+    #:
+    #: Twenty-two points of recall on real labels is not worth two points of precision,
+    #: and the reason is physical: when the recorder stops, event-driven topics stop too,
+    #: so their silence is evidence exactly like anyone else's. The phantom is fixed by
+    #: its actual shape instead — see `CorrelationConfig.max_stall_fraction`.
+
     def _expected_topic_count(self) -> int:
         """How many topics this recording should carry — the correlation denominator.
 
@@ -170,7 +190,10 @@ class Auditor:
     def finish(self) -> HealthReport:
         """Close every detector and assemble the report. Safe to call on a restored
         auditor: nothing here needs an arrival this process did not see."""
-        if "file_integrity" in self.enabled:
+        # A live subscription has no file to validate. Asked anyway, `validate_file`
+        # answers "file does not exist" — a CRITICAL finding, on every snapshot, about a
+        # recording that was never supposed to be one. Sources that are not files say so.
+        if "file_integrity" in self.enabled and getattr(self.reader, "has_file", True):
             from ..readers.recovery import validate_file
 
             self.integrity = validate_file(self.reader.path)
@@ -202,6 +225,7 @@ class Auditor:
             "n": self.n,
             "enabled": sorted(self.enabled),
             "topic_filter": self.topic_filter,
+            "mission_id": self._mission_id,
             "timeline": self.timeline.to_state(),
             "clock": self.clock.to_state() if self.clock is not None else None,
             "correlation": self.correlation.to_state() if self.correlation is not None else None,
@@ -234,6 +258,7 @@ class Auditor:
         obj.t0 = state["t0"]
         obj.t_end = float(state["t_end"])
         obj.n = int(state["n"])
+        obj._mission_id = state.get("mission_id")
         obj.timeline = TimelineAccumulator.from_state(state["timeline"])
 
         if state["clock"] is not None:
@@ -244,6 +269,9 @@ class Auditor:
             from .correlation import CorrelationDetector
 
             obj.correlation = CorrelationDetector.from_state(state["correlation"], obj.cfg)
+            # a hook, not state: it closes over this auditor and must be re-attached to
+            # the restored one, or a resumed pass would judge topics the first pass would
+            # have refused to judge
 
         for topic, ts in state["topics"].items():
             cadence = TopicCadence.from_state(ts["cadence"], obj.cfg.cadence)
@@ -280,11 +308,16 @@ class Auditor:
     def _assemble(self) -> HealthReport:
         from .score import build_caveats, file_score, overall_score, topic_score, verdict_for
 
-        mission_id = ""
-        try:
-            mission_id = mission_id_for(self.reader.path)
-        except Exception:
-            mission_id = self.meta.path
+        # Computed once per auditor and carried through `to_state`. It reads 2 MB off the
+        # disk, which a live monitor snapshotting at 1 Hz would otherwise pay for every
+        # second — and on a file still being written it would answer differently each
+        # time, filing one mission into a fleet catalog under a new id every snapshot.
+        if self._mission_id is None:
+            try:
+                self._mission_id = mission_id_for(self.reader.path)
+            except Exception:
+                self._mission_id = self.meta.path
+        mission_id = self._mission_id
 
         prov = Provenance(
             mission_id=mission_id,

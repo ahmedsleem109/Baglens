@@ -131,6 +131,16 @@ class CorrelationConfig:
     overlap_frac: float = 0.5
     system_wide: float = 0.7
     isolated: float = 0.2
+    #: bounded state: silent intervals retained for the whole recording, longest kept.
+    #: The window itself is bounded by `window_s`; this bounds the history behind it.
+    max_results: int = 1000
+    #: A merged stall longer than this fraction of the stream is rejected as a modelling
+    #: failure rather than reported. On a recording that is mostly event-driven topics,
+    #: one interval can otherwise grow to span the entire file — measured at 1,489 s of a
+    #: 1,492 s shuttle-bus rosbag. 0.5 is far above any real recorder stall in the PX4
+    #: corpus (the longest is seconds) and far below the artefact, so it separates them
+    #: without touching a labelled dropout.
+    max_stall_fraction: float = _env_float("max_stall_fraction", 0.5)
 
 
 @dataclass(frozen=True)
@@ -230,16 +240,30 @@ def load_config(
     cache = _env_path("cache_dir", Path.home() / ".baglens")
     cache.mkdir(parents=True, exist_ok=True)
 
-    # The default windows are sized for accuracy on a workstation (~3.1 KB of state per
-    # topic). BAGLENS_EDGE_PROFILE=1 shrinks them to fit the <2 KB/topic device budget;
-    # detection targets still hold, with slightly noisier baselines.
+    # The default windows are sized for accuracy on a workstation. BAGLENS_EDGE_PROFILE=1
+    # shrinks them to fit the <2 KB/topic device budget; detection targets still hold,
+    # with slightly noisier baselines (re-checked by running `evals.integrity.run` with
+    # the variable set).
+    #
+    # The sizes are not guesses. Per topic the budget spends:
+    #   cadence  8*hist_bins + 8*ring_size + 8*cv_window + 128  =  896 B
+    #   gap      48*max_gaps + 64                               =  832 B
+    #   degrad   8*n_buckets + 96                               =  192 B
+    #   jitter   96 (its variance window is the cadence one)    =   96 B
+    #                                                             ------
+    #                                                             2016 B
+    # Measured on a real 118-topic PX4 flight, the previous settings peaked at 6,160 B on
+    # `/sensor_gyro_fft` — three times the budget, because `max_gaps` was left at its
+    # workstation value of 1000 and one gappy topic can therefore hold 48 KB on its own.
+    # A cap that only binds on a workstation is not a device budget.
     edge = os.environ.get("BAGLENS_EDGE_PROFILE") == "1"
     profile: dict[str, Any] = {}
     if edge:
         profile = {
-            "cadence": CadenceConfig(hist_bins=48, ring_size=32),
-            "jitter": JitterConfig(window=96),
-            "degradation": DegradationConfig(n_buckets=24),
+            "cadence": CadenceConfig(hist_bins=32, ring_size=16),
+            "jitter": JitterConfig(window=48),
+            "degradation": DegradationConfig(n_buckets=12),
+            "gap": GapConfig(max_gaps=16),
         }
 
     return Config(

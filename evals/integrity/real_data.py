@@ -67,6 +67,29 @@ def merge(intervals: list[Interval], slack: float = 0.0) -> list[Interval]:
     return out
 
 
+def claimed_stalls(findings: list[Any]) -> list[Interval]:
+    """The `correlation` findings that are actually claims about a silence.
+
+    `detector == "correlation"` is not the same question. That detector also emits
+    bookkeeping — a truncation notice when its interval store hits its cap — which spans
+    the whole recording. Scored as a prediction it swallows every other interval in the
+    merge and takes the flight's precision with it.
+
+    The two substantive claims are kept together here because that is what the published
+    number has always meant, and changing its definition silently would be worse than the
+    number being imperfect. `scripts/split_false_positives.py` scores them apart, and the
+    split matters: a ULog dropout record is evidence for `system-wide stall` and says
+    nothing either way about `subsystem failure`.
+    """
+    return [
+        (f.t_start, f.t_end)
+        for f in findings
+        if f.detector == "correlation"
+        and (f.summary.startswith("system-wide stall")
+             or f.summary.startswith("subsystem failure"))
+    ]
+
+
 def overlaps(a: Interval, b: Interval, tol: float) -> bool:
     return a[0] - tol <= b[1] and b[0] - tol <= a[1]
 
@@ -93,10 +116,7 @@ def score_flight(path: Path, min_ms: float, tol: float) -> tuple[FlightScore, li
     truth = truth_intervals(log, t0, min_ms)
 
     report = Auditor(reader).run()
-    pred = merge(
-        [(f.t_start, f.t_end) for f in report.findings if f.detector == "correlation"],
-        slack=0.5,
-    )
+    pred = merge(claimed_stalls(report.findings), slack=0.5)
 
     matched_truth = sum(1 for g in truth if any(overlaps(g, p, tol) for p in pred))
     matched_pred = sum(1 for p in pred if any(overlaps(p, g, tol) for g in truth))
