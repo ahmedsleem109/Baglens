@@ -117,6 +117,20 @@ def bag1_bag(clean_bag: Path, bagdir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def ulg_bag(clean_bag: Path, bagdir: Path) -> Path:
+    """The same clean recording as a PX4 `.ulg` — tens of KB, not the 70 MB a flight is."""
+    pytest.importorskip("pyulog", reason="ULog reading needs the ulog extra")
+    return g.to_ulg(clean_bag, bagdir / "clean.ulg")
+
+
+@pytest.fixture(scope="session")
+def ulg_dropout_bag(clean_bag: Path, bagdir: Path) -> Path:
+    """Carries the logger's own dropout record — the label the real-data eval scores against."""
+    pytest.importorskip("pyulog", reason="ULog reading needs the ulog extra")
+    return g.to_ulg(clean_bag, bagdir / "dropout.ulg", dropouts=((40.0, 0.6), (41.0, 0.4)))
+
+
+@pytest.fixture(scope="session")
 def truncated_bag(bagdir: Path) -> Path:
     p = bagdir / "truncated.mcap"
     g.generate_bag(p, seed=8, duration_s=90.0, faults=[g.truncation(0.6)])

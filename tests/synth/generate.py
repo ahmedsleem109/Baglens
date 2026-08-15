@@ -646,6 +646,86 @@ def to_bag1(src_mcap: str | Path, dst: str | Path) -> Path:
     return target
 
 
+#: ULog file magic, followed by a one-byte format version. Same bytes pyulog verifies.
+ULOG_MAGIC = b"\x55\x4c\x6f\x67\x01\x12\x35"
+
+
+def ulog_name(topic: str) -> str:
+    """The ULog dataset name a ROS topic maps to, and back again.
+
+    ULog names a dataset after the uORB struct, so there is no room for a path: `/imu/data`
+    becomes `imu_data`, which `UlogReader` then reports as `/imu_data`. Exported because
+    the format-equivalence test needs the same mapping to line the four formats up.
+    """
+    return topic.lstrip("/").replace("/", "_")
+
+
+def to_ulg(src_mcap: str | Path, dst: str | Path,
+           dropouts: tuple[tuple[float, float], ...] = ()) -> Path:
+    """Convert a generated MCAP into a PX4 `.ulg`.
+
+    Written by hand because no converter exists in either direction, and because the
+    format with the most *real* coverage in this repository had the least automated
+    protection — a real flight is 70 MB, so CI carried none at all. This produces a few
+    tens of KB from the same schedule the other three formats use, so a ULog-specific
+    reader bug shows up in the equivalence test rather than in a re-run of the corpus.
+
+    Only the subset of ULog that `UlogReader` reads is emitted: one dataset per topic,
+    each `uint64 timestamp` plus one `float value`. `dropouts` are `(t_relative, duration_s)`
+    pairs written as the logger's own dropout records — the same records that are the
+    ground truth in `evals/integrity/real_data.py`.
+    """
+    import struct
+
+    from baglens.readers import open_bag
+
+    target = Path(dst)
+    if target.exists():
+        return target
+
+    reader = open_bag(Path(src_mcap))
+    try:
+        arrivals = sorted(reader.arrivals(), key=lambda a: a.log_time_ns)
+    finally:
+        reader.close()
+    if not arrivals:
+        raise ValueError(f"{src_mcap} has no arrivals to convert")
+
+    t0_ns = arrivals[0].log_time_ns
+    ids: dict[str, int] = {}
+    for a in arrivals:
+        ids.setdefault(a.topic, len(ids))
+
+    def msg(kind: bytes, payload: bytes) -> bytes:
+        return struct.pack("<HB", len(payload), kind[0]) + payload
+
+    out = bytearray()
+    out += ULOG_MAGIC + bytes([1]) + struct.pack("<Q", t0_ns // 1000)
+    # definitions section: flag bits, then one format per dataset
+    out += msg(b"B", b"\x00" * 40)
+    for topic in ids:
+        out += msg(b"F", f"{ulog_name(topic)}:uint64_t timestamp;float value;".encode())
+    # data section: subscriptions, then the samples themselves
+    for topic, msg_id in ids.items():
+        out += msg(b"A", struct.pack("<BH", 0, msg_id) + ulog_name(topic).encode())
+
+    # Timestamps stay on the file's own clock rather than being rebased to zero: pyulog
+    # dates a dropout record from the last data message it read, so the two must share a
+    # scale or `truth_intervals` places every label outside the recording.
+    pending = sorted(dropouts)
+    t0_us = t0_ns // 1000
+    for i, a in enumerate(arrivals):
+        rel_us = (a.log_time_ns - t0_ns) // 1000
+        out += msg(b"D", struct.pack("<HQf", ids[a.topic], t0_us + rel_us, float(i)))
+        while pending and pending[0][0] <= rel_us / 1e6:
+            _t, dur = pending.pop(0)
+            out += msg(b"O", struct.pack("<H", int(dur * 1000)))
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(bytes(out))
+    return target
+
+
 def write_growing(path: str | Path, seed: int = 0, duration_s: float = 30.0,
                   topics: tuple[TopicSpec, ...] = SMALL_TOPICS) -> Path:
     """Write a bag and leave it *unfinished*: no summary, no trailing magic.
