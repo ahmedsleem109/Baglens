@@ -181,3 +181,76 @@ def test_tail_feed_follows_an_unfinished_recording(growing_bag: Path) -> None:
     assert all(
         a.log_time_ns <= b.log_time_ns for a, b in zip(arrivals, arrivals[1:], strict=False)
     ), "tail feed emitted arrivals out of order"
+
+
+def test_tail_feed_resumes_across_growth_without_duplicating(
+    growing_bag: Path, tmp_path: Path
+) -> None:
+    """Grow the file mid-tail: every arrival exactly once, in order, none invented.
+
+    The resume is by log time plus a count of the arrivals already emitted at that exact
+    timestamp. Ties are the whole difficulty — a 100 Hz topic and a 50 Hz topic share
+    timestamps constantly, and resuming on the timestamp alone would either replay them
+    or swallow them. This asserts against the completed file, so both failures show.
+    """
+    whole = growing_bag.read_bytes()
+    target = tmp_path / "tail.mcap"
+    target.write_bytes(whole[: len(whole) // 3])
+
+    feed = TailFeed(target, poll_s=0.0, idle_timeout_s=0.2)
+    got = []
+    for arrival in feed.arrivals():
+        got.append(arrival)
+        if len(got) == 50:
+            target.write_bytes(whole)  # the writer catches up mid-stream
+
+    expected = list(open_bag(growing_bag).arrivals())
+    assert len(got) > 50, "tail feed stopped before the file finished growing"
+    assert got == expected
+
+
+def test_tail_feed_reads_each_byte_once(growing_bag: Path, tmp_path: Path) -> None:
+    """The defect this replaced was quadratic: every poll re-read the file from zero.
+
+    The cursor is what fixes it, so the property to hold is that it only moves forward
+    and never revisits ground — checked by counting the records the scanner actually
+    parses across the whole tail, which must not exceed the file's message count.
+    """
+    from baglens.readers import mcap_reader
+
+    whole = growing_bag.read_bytes()
+    target = tmp_path / "tail.mcap"
+    target.write_bytes(whole[: len(whole) // 4])
+
+    # An unfinished file has no summary, so establishing that costs one scan of whatever
+    # is on disk when the feed opens it. That is a one-off and is allowed for; what must
+    # not happen is another one per poll.
+    probe = tmp_path / "probe.mcap"
+    probe.write_bytes(whole[: len(whole) // 4])
+    allowance = sum(1 for _ in open_bag(probe).arrivals())
+
+    parsed = 0
+    real_scan = mcap_reader.recover_messages
+
+    def counting_scan(path, cursor=None):
+        nonlocal parsed
+        for item in real_scan(path, cursor):
+            parsed += 1
+            yield item
+
+    mcap_reader.recover_messages = counting_scan
+    try:
+        feed = TailFeed(target, poll_s=0.0, idle_timeout_s=0.2)
+        got = 0
+        for _ in feed.arrivals():
+            got += 1
+            if got == 20:
+                target.write_bytes(whole)
+    finally:
+        mcap_reader.recover_messages = real_scan
+
+    assert got > 20
+    assert parsed <= got + allowance, (
+        f"scanner parsed {parsed} records to yield {got} arrivals "
+        f"(one opening scan of {allowance} is expected)"
+    )

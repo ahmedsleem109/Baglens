@@ -62,8 +62,16 @@ class BagReader(Protocol):
 
     def metadata(self) -> BagMetadata: ...
 
-    def arrivals(self, topics: list[str] | None = None) -> Iterator[Arrival]:
-        """Single pass over timing records, ordered by log time. The hot path."""
+    def arrivals(
+        self, topics: list[str] | None = None, start_time_ns: int | None = None
+    ) -> Iterator[Arrival]:
+        """Single pass over timing records, ordered by log time. The hot path.
+
+        ``start_time_ns`` is a resume point: yield only arrivals at or after it, and get
+        there as cheaply as the container allows — an index seek, a `WHERE`, or a byte
+        offset carried from the previous scan. It exists so that following a file which
+        is still being written costs one pass in total rather than one pass per poll.
+        """
         ...
 
     def numeric_field(self, topic: str, path: str) -> Iterator[tuple[int, float]]:

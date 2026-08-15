@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,19 +22,45 @@ from mcap.stream_reader import StreamReader
 from .base import Arrival, BagMetadata, TopicInfo, dotted_get
 
 
-def recover_messages(path: Path) -> Iterator[tuple[Schema | None, Channel, Message, int]]:
+@dataclass
+class ScanCursor:
+    """Where a sequential scan stopped, so the next one resumes instead of restarting.
+
+    A file being written has no summary, so every poll re-scanned it from byte zero and
+    discarded what it had already seen — quadratic in the number of polls, which is fine
+    for a 30-second demo and wrong for an hour-long mission. Carrying the offset is not
+    enough on its own: schema and channel records appear once, near the start, so a scan
+    that begins mid-file cannot name the topic a message belongs to unless it inherits
+    the tables built by the scan before it.
+    """
+
+    offset: int = 0
+    last_time_ns: int = 0
+    schemas: dict[int, Schema] = field(default_factory=dict)
+    channels: dict[int, Channel] = field(default_factory=dict)
+
+
+def recover_messages(
+    path: Path, cursor: ScanCursor | None = None
+) -> Iterator[tuple[Schema | None, Channel, Message, int]]:
     """Sequential record scan for files with no summary section.
 
     Built on ``StreamReader`` rather than ``NonSeekingReader``: the latter gives up on
     a file whose tail is missing, which is precisely the file we are trying to rescue.
     Yields ``(schema, channel, message, offset)`` and simply stops when the records run
     out mid-stream — the caller reports how far it got.
+
+    Pass a ``ScanCursor`` to resume where the last scan ended; it is advanced in place
+    and only ever moves forward, so a caller that keeps one across polls reads each byte
+    of the file once no matter how often it asks.
     """
-    schemas: dict[int, Schema] = {}
-    channels: dict[int, Channel] = {}
+    cur = cursor if cursor is not None else ScanCursor()
+    schemas, channels = cur.schemas, cur.channels
     with path.open("rb") as f:
+        if cur.offset:
+            f.seek(cur.offset)
         try:
-            for record in StreamReader(f, skip_magic=False).records:
+            for record in StreamReader(f, skip_magic=bool(cur.offset)).records:
                 if isinstance(record, Schema):
                     schemas[record.id] = record
                 elif isinstance(record, Channel):
@@ -41,7 +68,11 @@ def recover_messages(path: Path) -> Iterator[tuple[Schema | None, Channel, Messa
                 elif isinstance(record, Message):
                     channel = channels.get(record.channel_id)
                     if channel is not None:
-                        yield schemas.get(channel.schema_id), channel, record, f.tell()
+                        # only commit the offset on a record that parsed completely, so a
+                        # torn tail is re-read next time rather than skipped
+                        cur.offset = f.tell()
+                        cur.last_time_ns = record.log_time
+                        yield schemas.get(channel.schema_id), channel, record, cur.offset
         except Exception:
             return
 
@@ -80,6 +111,8 @@ class McapReader:
         self.path = Path(path)
         self._meta: BagMetadata | None = None
         self._decoder_factories: list[Any] | None = None
+        #: resume point for a caller tailing a file that has no summary yet
+        self._scan = ScanCursor()
 
     # -- internals ---------------------------------------------------------
 
@@ -171,13 +204,22 @@ class McapReader:
             for t, c in counts.items()
         ]
 
-    def arrivals(self, topics: list[str] | None = None) -> Iterator[Arrival]:
+    def arrivals(
+        self, topics: list[str] | None = None, start_time_ns: int | None = None
+    ) -> Iterator[Arrival]:
         meta = self.metadata()
         wanted = set(topics) if topics else None
 
         if not meta.has_summary:
-            # recovery path: records in file order, which is log order for any recorder
-            for _schema, channel, message, _off in recover_messages(self.path):
+            # recovery path: records in file order, which is log order for any recorder.
+            # `start_time_ns` is a resume request from a tailing caller, and the cursor is
+            # what makes it cheap: without it the scan restarts at byte zero every poll.
+            cursor = self._scan if start_time_ns is not None else None
+            if cursor is not None and cursor.last_time_ns > (start_time_ns or 0):
+                cursor = None  # asked to go back before where we are; rescan honestly
+            for _schema, channel, message, _off in recover_messages(self.path, cursor):
+                if start_time_ns is not None and message.log_time < start_time_ns:
+                    continue
                 if wanted is None or channel.topic in wanted:
                     yield Arrival(
                         channel.topic,
@@ -188,7 +230,9 @@ class McapReader:
             return
 
         with self.path.open("rb") as f:
-            it = make_reader(f).iter_messages(topics=topics, log_time_order=True)
+            it = make_reader(f).iter_messages(
+                topics=topics, start_time=start_time_ns, log_time_order=True
+            )
             try:
                 for _schema, channel, message in it:
                     yield Arrival(

@@ -45,10 +45,12 @@ class Ros1Reader:
         self._meta = meta
         return meta
 
-    def arrivals(self, topics: list[str] | None = None) -> Iterator[Arrival]:
+    def arrivals(
+        self, topics: list[str] | None = None, start_time_ns: int | None = None
+    ) -> Iterator[Arrival]:
         with self._reader() as reader:
             conns = [c for c in reader.connections if not topics or c.topic in topics]
-            for conn, timestamp, raw in reader.messages(connections=conns):
+            for conn, timestamp, raw in reader.messages(connections=conns, start=start_time_ns):
                 yield Arrival(conn.topic, int(timestamp), int(timestamp), len(raw))
 
     def messages(

@@ -111,7 +111,9 @@ class UlogReader:
         self._meta = meta
         return meta
 
-    def arrivals(self, topics: list[str] | None = None) -> Iterator[Arrival]:
+    def arrivals(
+        self, topics: list[str] | None = None, start_time_ns: int | None = None
+    ) -> Iterator[Arrival]:
         log = self._open()
         wanted = set(topics) if topics else None
         rows: list[Arrival] = []
@@ -128,7 +130,9 @@ class UlogReader:
                 for ts in stamps.values
             )
         rows.sort(key=lambda a: a.log_time_ns)
-        yield from rows
+        # a ULog is never tailed — pyulog parses the whole file — so the resume point is
+        # honoured by filtering rather than by seeking
+        yield from (a for a in rows if start_time_ns is None or a.log_time_ns >= start_time_ns)
 
     def messages(
         self,

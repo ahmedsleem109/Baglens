@@ -85,16 +85,25 @@ class Db3Reader:
         self._meta = meta
         return meta
 
-    def arrivals(self, topics: list[str] | None = None) -> Iterator[Arrival]:
+    def arrivals(
+        self, topics: list[str] | None = None, start_time_ns: int | None = None
+    ) -> Iterator[Arrival]:
         db = self._db()
         sql = (
             "SELECT t.name, m.timestamp, LENGTH(m.data) FROM messages m "
             "JOIN topics t ON t.id = m.topic_id"
         )
         params: list[Any] = []
+        where: list[str] = []
         if topics:
-            sql += f" WHERE t.name IN ({','.join('?' * len(topics))})"
+            where.append(f"t.name IN ({','.join('?' * len(topics))})")
             params = list(topics)
+        if start_time_ns is not None:
+            # a resuming reader pays for the rows it has not seen, not the whole table
+            where.append("m.timestamp >= ?")
+            params.append(int(start_time_ns))
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY m.timestamp"
         for name, ts, size in db.execute(sql, params):
             yield Arrival(name, int(ts), int(ts), int(size or 0))

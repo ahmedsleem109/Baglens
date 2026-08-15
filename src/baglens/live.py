@@ -103,11 +103,16 @@ class ReplayFeed:
 class TailFeed:
     """Follow a recording that is still being written.
 
-    Re-opens the file whenever it grows and resumes after the arrivals already seen.
-    Crude by design: it needs no inotify (unreliable across `/mnt/c`) and no ROS, and it
-    is enough to prove the detectors behave on a stream that has no end. `idle_timeout_s`
-    ends the feed after a stretch with no growth, so a caller is not stuck forever on a
-    recording whose writer has died.
+    Polls for growth and resumes from the last arrival it yielded. Crude by design: it
+    needs no inotify (unreliable across `/mnt/c`) and no ROS, and it is enough to prove
+    the detectors behave on a stream that has no end. `idle_timeout_s` ends the feed
+    after a stretch with no growth, so a caller is not stuck forever on a recording whose
+    writer has died.
+
+    Resuming is by log time, which every container can honour, with a count of how many
+    arrivals already went out *at* that exact timestamp — ties are common at 100 Hz and a
+    timestamp alone would either duplicate them or drop them. Two ints of state, and the
+    file is read once in total rather than once per poll.
     """
 
     path: str | Path
@@ -124,19 +129,30 @@ class TailFeed:
         return self._reader
 
     def arrivals(self) -> Iterator[Arrival]:
-        seen = 0
+        # 0 rather than None even on the first pass: passing a resume point is what tells
+        # the reader this is a tail and puts its scan cursor to work, and no arrival is
+        # filtered by it
+        resume_ns = 0
+        n_at_resume = 0
         last_growth = time.monotonic()
         last_size = -1
         while True:
             size = Path(self.path).stat().st_size
             if size != last_size:
                 last_size, last_growth = size, time.monotonic()
-                fresh = open_bag(self.path)
-                self._reader = fresh
-                for i, arrival in enumerate(fresh.arrivals(self.topics)):
-                    if i < seen:
+                # The reader is kept, not re-opened. Re-opening looked harmless and was
+                # half the quadratic cost: an unfinished file has no summary, so building
+                # its metadata means scanning every record, and that happened once per
+                # poll on top of the arrivals scan itself.
+                skipped = 0
+                for arrival in self.reader.arrivals(self.topics, start_time_ns=resume_ns):
+                    if arrival.log_time_ns == resume_ns and skipped < n_at_resume:
+                        skipped += 1
                         continue
-                    seen = i + 1
+                    if arrival.log_time_ns == resume_ns:
+                        n_at_resume += 1
+                    else:
+                        resume_ns, n_at_resume = arrival.log_time_ns, 1
                     yield arrival
             if time.monotonic() - last_growth > self.idle_timeout_s:
                 return
