@@ -51,13 +51,16 @@ is the difference between "the camera failed" and "the recorder stalled". It cos
 uvx --from git+https://github.com/ahmedsleem109/Baglens baglens --stdio
 ```
 
-No ROS installation required. `.mcap`, rosbag2 `.db3` and ROS 1 `.bag` are read in pure
-Python and each is covered by end-to-end tests that assert all three reach identical
-conclusions on the same recording. PX4 `.ulg` is read behind the `ulog` extra
-(`uv sync --extra ulog`) and has been audited end to end against real flight logs from
-review.px4.io — see [`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md). CI
-does not cover `.ulg`: there is no small fixture, because a real PX4 log is 70 MB and a
-synthetic one would only test our own assumptions again.
+No ROS installation required. `.mcap`, rosbag2 `.db3`, ROS 1 `.bag` and PX4 `.ulg` are
+read in pure Python, and all four are covered by an end-to-end test asserting they reach
+identical conclusions on the same recording. `.ulg` needs the `ulog` extra
+(`uv sync --extra ulog`).
+
+**Tested on other people's robots, not only on our own fixtures.** 105 public PX4 flights
+from review.px4.io ([`REAL_DATA.md`](evals/integrity/REAL_DATA.md)) and 11 real ROS 2
+recordings across 5 platforms — an autonomous shuttle bus, a Tesla Model 3, a quadruped, a
+short-run rig and a handheld LiDAR rig ([`ROS2_DATA.md`](evals/integrity/ROS2_DATA.md)).
+`scripts/fetch_ros2.sh` downloads the ROS 2 set so anyone can re-run it.
 
 ## Why this exists
 
@@ -108,27 +111,45 @@ Scored against it across **105 distinct public flights** from review.px4.io — 
 
 | | Recall | Precision | F1 |
 |---|---|---|---|
-| `correlation` vs. PX4's own dropout records | **1.000** | **0.381** | 0.552 |
+| `correlation` vs. PX4's own dropout records | **0.993** | **0.942** | 0.967 |
 
-**Every dropout the recorder admitted to was found. Two out of three reported stalls
-match no label.** That precision number is bad, it is published anyway, and it is the
-most useful number here — read the next paragraph before drawing a conclusion from it.
+**151 of the 152 dropouts the recorder admitted to were found, and nineteen out of twenty
+reported stalls match one.** The one miss is not a detection failure but a *bounded-state*
+one: the detector keeps at most 1000 silent intervals, and on the busiest flight in the
+corpus one real stall is evicted. Streaming with fixed memory is the constraint the whole
+library is built on, so that trade is deliberate and stated rather than quietly relaxed.
 
-An earlier version of this table read `0.832` across twelve flights, and the difference is
-a lesson rather than a regression. Those twelve were chosen by `audit_corpus.py`'s
-interest ranking, which is a selection effect: they were the flights with the most going
-on, so most of their stalls were real. Running the identical eval over the whole corpus —
-105 flights instead of 12 — moved precision to 0.381 with recall unchanged. The detector
-did not get worse; the measurement got honest. A fix made in the same session improved
-precision from 0.365 to 0.381 on the full corpus (and 0.832 → 0.917 on the old twelve),
-which is also the size of gap between a flattering sample and a representative one.
+This table read `0.381` until the false positives were split by class and looked at, and
+the history is the point. `correlation` makes two different claims — `system-wide stall`
+("the recorder stopped") and `subsystem failure` ("a shared driver died") — and the eval
+was scoring both against dropout labels, which are evidence for the first and silent
+about the second. Splitting them showed the stall claim was already at 0.954 while the
+subsystem claim sat at 0.071, and that 236 of the 242 unmatched findings came from one
+defect: a topic counted as "co-silent" whenever it merely had not published recently. A
+1 Hz topic is idle across any 0.4 s window by construction, so short gaps on event-driven
+topics collected a dozen innocent bystanders each. Topics too slow to have been due
+within an interval now leave both the numerator and the denominator, and the corpus went
+from 391 findings to 156. The per-class split is in
+[`evals/integrity/FP_SPLIT.md`](evals/integrity/FP_SPLIT.md).
 
-What this means in practice: **trust a stall finding's recall, verify its precision.**
-If `correlation` says the recording was clean, believe it. If it reports a stall, the
+What did **not** work is worth as much. Making this detector honour `unassessable` — the
+flag that already stops D2 and the per-topic scores judging event-driven topics — looks
+like the obvious next fix and was tried four ways. Every one of them cost 22+ points of
+recall against real labels, because when the recorder stops, event-driven topics stop too
+and their silence is evidence exactly like anyone else's. The measurements are in
+[`PHASE3.md`](PHASE3.md).
+
+Before that, an earlier version read `0.832` across twelve flights — the flights
+`audit_corpus.py` had ranked most interesting, which is a selection effect. Running the
+identical eval over all 105 moved it to 0.381 with recall unchanged. The detector did not
+get worse; the measurement got honest. **Any number measured on a subset that something
+selected should be assumed flattering until re-run on everything.**
+
+What this means in practice: **a stall finding's recall is the stronger claim.** If
+`correlation` says the recording was clean, believe it. If it reports a stall, the
 co-silent topic list is the evidence to check — that is why every finding carries one.
 Method, per-flight breakdown, and what this does *not* measure are in
-[`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md); the plan for closing the
-precision gap is Tier 1.7 in [`ROADMAP.md`](ROADMAP.md).
+[`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md).
 
 **What real data broke, and what fixed it.** The first run against those flights graded
 every single one `compromised`, at 47–56/100, with 900–3000 findings each — against a
@@ -196,19 +217,35 @@ recording, needs the end time, or makes a second pass:
   reported rather than hidden.
 
 That costs perhaps 20% more effort and buys two things: 50 GB files audit without being
-loaded, and the same code runs unchanged against a live subscription. Measured state is
-**~3.1 KB per topic**; `BAGLENS_EDGE_PROFILE=1` shrinks the windows to fit under 2 KB.
+loaded, and the same code runs unchanged against a live subscription.
+
+**The per-topic bound is only a bound under `BAGLENS_EDGE_PROFILE=1`, and that is now
+gated in CI.** The default profile keeps up to 1000 gaps per topic on purpose, so one
+gappy topic can hold 48 KB — a workstation trade, not a device budget. Measured on a real
+118-topic PX4 flight: 7,360 B on the worst topic by default, **2,016 B under the edge
+profile**, which is where the "<2 KB per topic" claim lives.
 
 ## Performance, measured
 
-On a 600-second, 8-topic, 158k-message recording (WSL2, single thread):
+On real recordings, not synthetic ones (WSL2, single thread):
 
-| Metric | Measured | Note |
+| Metric | 66 MB PX4 `.ulg`, 118 topics | 886 MB ROS 2 MCAP, 4 topics |
 |---|---|---|
-| Arrival scan (payload-free) | 69,000 msg/s · 5.0 MB/s | no detectors, timing records only |
-| Full audit, all 8 detectors | 25,000 msg/s · 1.8 MB/s | the number that matters |
-| Peak RSS | 39 MB | independent of file size |
-| State per topic | 3,136 B | 1,888 B under `BAGLENS_EDGE_PROFILE=1` |
+| Arrival scan (payload-free) | 205,000 msg/s · 16 MB/s | 21,000 msg/s · 766 MB/s |
+| Full audit, all 8 detectors | 44,500 msg/s · 3.5 MB/s | 13,800 msg/s · 501 MB/s |
+| Peak RSS | 257 MB | 39 MB |
+| State per topic (edge profile) | 2,016 B | 1,984 B |
+
+Two caveats a reader should have, rather than a round number:
+
+- **The 257 MB is the reader, not the detectors.** `pyulog` parses an entire ULog into
+  numpy before the first arrival is seen. The detectors themselves hold under 1 MB of it,
+  and the streaming formats stay at 39 MB regardless of file size. The bounded-state
+  claim is about the detectors and it holds; the ULog *reader* is not streaming.
+- **A live snapshot costs more than the audit.** Snapshotting at 1 Hz on a 2.7 kHz stream
+  roughly doubles the run — the previously published "~14%" was wrong. One snapshot is
+  ~80 ms on a 311 s flight (down from 162 ms), and it is `finish()`, not serialisation,
+  that dominates. Measure your own cadence with `scripts/bench_snapshot.py`.
 
 MB/s is dominated by *message count*, not bytes: the audit never parses payloads, so a
 bag full of camera frames audits far faster per megabyte than these tiny synthetic

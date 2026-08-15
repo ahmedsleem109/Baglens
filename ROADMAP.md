@@ -318,6 +318,29 @@ the tool actually makes about the recorder.
 low-precision/perfect-recall detector is still the right trade for this job. The README now
 states 0.381 and says which half to trust; that is honest but it is not yet a fix.
 
+### ✅ CLOSED — precision 0.381 → 0.942 at recall 0.993
+
+Splitting the 239 unmatched findings by class first, as this tier said to, is what made
+the fix small. `correlation` emits two claims and the eval scored both against dropout
+labels that are evidence for only one; scored apart, the stall claim was already at 0.954
+and the subsystem claim at 0.071. That located a single defect: a topic counted as
+co-silent whenever it merely had not published recently, so a 0.4 s gap on an event-driven
+topic collected a dozen idle bystanders. Requiring a topic to have been *due* within an
+interval — and removing it from the denominator as well as the numerator when it was not —
+took the corpus from 391 findings to 156.
+
+Two things this tier warned about both happened, in the same session:
+
+* **The obvious follow-up fix was wrong, four times.** Making D7 honour `unassessable`
+  costs 22+ points of recall on real labels; the measurements are in `PHASE3.md`. When the
+  recorder stops, event-driven topics stop too.
+* **A change made for performance moved the numbers.** The bounded-state cap added to
+  `CorrelationDetector.results` ranked intervals by duration. The longest silences belong
+  to isolated slow topics; the stalls are seconds long. It evicted 35 of 152 labelled
+  dropouts while the test suite and both synthetic evals stayed green. Ranking by
+  concurrency fixed it. **Re-run the corpus after any detector change, including a
+  performance one.**
+
 ---
 
 ## Tier 2 — Launch
