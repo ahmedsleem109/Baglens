@@ -52,6 +52,14 @@ jobs:
         run: uv run python scripts/bench.py --duration 300 --gate
         env:
           PYTHONPATH: .
+      # The device budget is the only per-topic bound this project promises, and it is
+      # only true under the edge profile — so it is gated there rather than asserted in
+      # a README. The default profile keeps 1000 gaps per topic on purpose.
+      - name: device state budget
+        run: uv run python scripts/bench.py --duration 300 --gate
+        env:
+          PYTHONPATH: .
+          BAGLENS_EDGE_PROFILE: "1"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

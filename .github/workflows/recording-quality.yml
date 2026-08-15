@@ -1,0 +1,69 @@
+# A recording-quality gate for someone else's repository.
+#
+# The `detectors` job in ci.yml gates *this* project's detectors. This one is the shape a
+# platform team would copy: their integration job writes bags, and a pull request that
+# quietly starts dropping messages should fail rather than merge.
+#
+# Copy this file, point `path` at wherever the job leaves its recordings, and pick a bar.
+# Prefer `--baseline` once there is one: a recording that has always scored 72 is not a
+# regression, and an absolute threshold on a project that cannot meet it gets lowered
+# until it means nothing.
+
+name: recording-quality
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "recordings/**"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+
+      # Stand-in for whatever produces the recordings in a real repository.
+      - name: produce recordings
+        run: |
+          mkdir -p "${RUNNER_TEMP}/recordings"
+          uv run python -m tests.synth.generate --matrix \
+            --out "${RUNNER_TEMP}/recordings" --faulted 0 --clean 4 --duration 60
+        env:
+          PYTHONPATH: .
+
+      - name: restore the previous baseline
+        id: baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: quality-baseline.json
+          key: recording-quality-baseline
+
+      - name: audit every recording and gate on it
+        run: |
+          uv run python scripts/quality_gate.py \
+            --path "${RUNNER_TEMP}/recordings" \
+            --max-verdict usable_with_caveats \
+            --baseline quality-baseline.json \
+            --max-drop 5 \
+            --out quality-report.json
+        env:
+          PYTHONPATH: .
+
+      # Only a green run updates the baseline, so a regression cannot become the new bar.
+      - name: update the baseline
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: quality-report.json
+          key: recording-quality-baseline
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-report
+          path: quality-report.json
