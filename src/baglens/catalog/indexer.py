@@ -96,12 +96,26 @@ def _robot_id(path: Path, meta: Any) -> str:
     return path.parent.name
 
 
-def index_mission(path: str | Path, catalog: Catalog, with_signals: bool = True) -> str:
+def index_mission(
+    path: str | Path,
+    catalog: Catalog,
+    with_signals: bool = True,
+    report: Any = None,
+    robot_id: str | None = None,
+) -> str:
+    """Audit a recording and write it into the catalog.
+
+    `report` skips the audit when the caller already has one — a monitor that watched the
+    mission live has, and re-reading a 2 GB recording at landing to reach a conclusion it
+    already holds is the difference between ingestion taking seconds and taking minutes.
+    `robot_id` overrides the directory-name guess, which is the whole point on a vehicle:
+    the fleet layer is only as good as its identities.
+    """
     path = Path(path)
     mission_id = mission_id_for(path)
     reader = open_bag(path)
-    auditor = Auditor(reader)
-    report = auditor.run()
+    if report is None:
+        report = Auditor(reader).run()
     meta = reader.metadata()
 
     start = datetime.fromtimestamp(meta.start_time_ns / 1e9) if meta.start_time_ns else None
@@ -112,7 +126,7 @@ def index_mission(path: str | Path, catalog: Catalog, with_signals: bool = True)
             "mission_id": mission_id,
             "path": str(path),
             "format": meta.format,
-            "robot_id": _robot_id(path, meta),
+            "robot_id": robot_id or _robot_id(path, meta),
             "start_time": start,
             "end_time": end,
             "duration_s": meta.duration_s,
