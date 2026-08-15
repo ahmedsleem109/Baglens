@@ -1,5 +1,6 @@
 {
   "continuation_token": "<volatile>",
+  "excluded_note": null,
   "gaps": [
     {
       "classification": "system_wide_stall",

@@ -97,6 +97,8 @@ class GapList(BaseModel):
     truncated: bool = False
     continuation_token: str | None = None
     suggested_narrowing: str | None = None
+    #: set when topics were left out for having no cadence to measure against
+    excluded_note: str | None = None
     provenance: Provenance = Field(default_factory=Provenance)
 
 
@@ -126,11 +128,25 @@ def _trim_topics(report: HealthReport) -> HealthReport:
     return report
 
 
+def _elide(text: str, limit: int = 120) -> str:
+    """Cut to `limit` chars on a word boundary, marking that it was cut.
+
+    A hard slice ends interpretations mid-word ("…the classic signature of"), which reads
+    like the tool crashed rather than like a budget trim. The ellipsis is the signal to
+    call `health.explain_finding` for the whole sentence.
+    """
+    if len(text) <= limit:
+        return text
+    head = text[: limit - 1]
+    cut = head.rfind(" ")
+    return (head[:cut] if cut > 0 else head).rstrip(" ,;:—-") + "…"
+
+
 def _trim_evidence(report: HealthReport) -> HealthReport:
     """Ladder step 3: drop the numbers, keep the claims. explain_finding restores them."""
     for f in report.findings:
         f.evidence = {}
-        f.interpretation = f.interpretation[:120]
+        f.interpretation = _elide(f.interpretation)
     if report.clock is not None:
         report.clock.lag_curve_t = report.clock.lag_curve_t[:20]
         report.clock.lag_curve_s = report.clock.lag_curve_s[:20]
@@ -203,6 +219,17 @@ def register(mcp: Any) -> None:
         details = [d for d in details if d.duration_s >= min_duration_s]
         if topic:
             details = [d for d in details if d.topic == topic]
+
+        # A topic with no cadence has no gaps either — the "gap" is just the quiet
+        # between events. `/event` on a PX4 flight learns 931 Hz from the spacing inside
+        # a burst and then reports 121,936 missing messages, which sorts straight to the
+        # top of a longest-first list. The audit already excludes these topics; this is
+        # the same call, made where the caller can see it was made. Asking for the topic
+        # by name still returns its gaps, because then it was a deliberate question.
+        skipped = sorted({d.topic for d in details if d.topic in auditor.unassessable})
+        if skipped and not topic:
+            details = [d for d in details if d.topic not in auditor.unassessable]
+
         details.sort(key=lambda d: -d.duration_s)
 
         total = len(details)
@@ -218,6 +245,20 @@ def register(mcp: Any) -> None:
             out.suggested_narrowing = (
                 f"showing gaps {offset + 1}–{shown} of {total}, longest first. Pass "
                 f"min_duration_s or topic= to narrow, or continuation_token to page on."
+            )
+        if skipped and not topic:
+            named = ", ".join(skipped[:6])
+            rest = len(skipped) - 6
+            if rest > 0:
+                named = f"{named}, and {rest} more"
+            subject = (
+                "1 topic with no measurable cadence was"
+                if len(skipped) == 1
+                else f"{len(skipped)} topics with no measurable cadence were"
+            )
+            out.excluded_note = (
+                f"{subject} excluded ({named}); their silences are the quiet between "
+                f"events, not gaps. Pass topic=<name> to see one anyway."
             )
         return out
 
@@ -456,11 +497,15 @@ def register(mcp: Any) -> None:
         return FindingDetail(
             finding=finding,
             rule=finding.rule,
+            # Report-level context is namespaced because it shares key names with the
+            # finding's own evidence: a correlation finding records `duration_s` for the
+            # stall, and an un-prefixed merge silently replaced a 6.31s stall with the
+            # 311.97s recording length — under the key an agent is most likely to cite.
             evidence={
                 **finding.evidence,
-                "verdict": report.verdict,
-                "overall_score": report.overall_score,
-                "duration_s": report.duration_s,
+                "recording_verdict": report.verdict,
+                "recording_overall_score": report.overall_score,
+                "recording_duration_s": report.duration_s,
             },
             next_steps=_next_steps(finding),
             related_findings=[
