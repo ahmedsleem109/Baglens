@@ -98,6 +98,27 @@ class FileIntegrity(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class Assessability(BaseModel):
+    """Whether the recording supports a verdict at all, and why not when it does not.
+
+    Separate from the score on purpose. A score of 0.0 claims the recording is bad; this
+    says nothing about the recording's health, only about whether health was measurable.
+    Conflating the two is what published a parked shuttle bus as `compromised`.
+    """
+
+    assessable: bool = True
+    #: the weakest of the four ratios against their floors, clipped to 1.0
+    confidence: float = 1.0
+    topics_total: int = 0
+    topics_assessable: int = 0
+    #: share of messages carried by topics that have a measurable rate
+    message_fraction: float = 1.0
+    #: share of the recording during which any assessable topic published
+    coverage_fraction: float = 1.0
+    duration_s: float = 0.0
+    reasons: list[str] = Field(default_factory=list)
+
+
 class ClockStep(BaseModel):
     t: float
     delta_s: float
@@ -153,7 +174,13 @@ class HealthReport(Budgeted):
     path: str = ""
     duration_s: float = 0.0
     overall_score: float = 100.0
-    verdict: Literal["trustworthy", "usable_with_caveats", "compromised"] = "trustworthy"
+    #: `unassessable` is not a worse grade than `compromised` — it is a refusal to grade.
+    #: When it is set, `overall_score` is the score of the part that could be measured and
+    #: must not be read as a judgement of the recording; `assessability.reasons` says why.
+    verdict: Literal["trustworthy", "usable_with_caveats", "compromised", "unassessable"] = (
+        "trustworthy"
+    )
+    assessability: Assessability | None = None
     findings: list[Finding] = Field(default_factory=list)
     topics: list[TopicHealth] = Field(default_factory=list)
     file_integrity: FileIntegrity | None = None

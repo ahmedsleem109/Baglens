@@ -1,4 +1,14 @@
 {
+  "assessability": {
+    "assessable": true,
+    "confidence": 1.0,
+    "coverage_fraction": 1.0,
+    "duration_s": 89.988,
+    "message_fraction": 1.0,
+    "reasons": [],
+    "topics_assessable": 5,
+    "topics_total": 5
+  },
   "caveats": [],
   "clock": {
     "backward_jump_times": [],

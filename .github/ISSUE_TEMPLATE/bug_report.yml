@@ -1,0 +1,39 @@
+name: Bug report
+description: A crash, a wrong number, a tool that does not behave as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a finding you believe is incorrect, use **A finding is wrong** instead — it
+        asks the questions that make that class of report actionable.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Include the full traceback if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: >
+        The command or tool call. If a recording is involved, say what shape it is —
+        format, duration, topics, rates — even if you cannot share the file.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      placeholder: "baglens 0.2.0, Python 3.13, Ubuntu 24.04 under WSL2"
+    validations:
+      required: true

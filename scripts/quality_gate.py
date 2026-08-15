@@ -36,6 +36,16 @@ from baglens.readers import open_bag  # noqa: E402
 #: worst to best; `--max-verdict` names the worst that still passes
 VERDICTS = ["compromised", "usable_with_caveats", "trustworthy"]
 
+#: `unassessable` is not on that ladder, because it is a refusal to grade rather than a
+#: grade. A gate cannot pass a recording nobody could assess — that is how an unaudited
+#: recording gets through wearing a clean label — so it is ranked below the worst grade
+#: for comparison purposes and reported by name.
+UNASSESSABLE = "unassessable"
+
+
+def rank(verdict: str) -> int:
+    return VERDICTS.index(verdict) if verdict in VERDICTS else -1
+
 
 def discover(path: Path) -> list[Path]:
     if path.is_file():
@@ -102,10 +112,16 @@ def main(argv: list[str] | None = None) -> int:
         if r.get("error"):
             failures.append(f"{name}: {r['error']}")
             continue
+        if str(r["verdict"]) == UNASSESSABLE:
+            failures.append(
+                f"{name}: {UNASSESSABLE} — too little of this recording could be measured "
+                f"to say whether it got worse"
+            )
+            continue
         if args.min_score is not None and score < args.min_score:
             failures.append(f"{name}: score {score:.1f} below {args.min_score:.1f}")
         if (args.max_verdict is not None
-                and VERDICTS.index(str(r["verdict"])) < VERDICTS.index(args.max_verdict)):
+                and rank(str(r["verdict"])) < rank(args.max_verdict)):
             failures.append(f"{name}: verdict {r['verdict']} worse than {args.max_verdict}")
         if name in baseline and baseline[name] - score > args.max_drop:
             failures.append(

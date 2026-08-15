@@ -1,7 +1,7 @@
 [project]
 name = "baglens"
-version = "0.2.0"
-description = "An MCP server that lets an agent investigate a fleet of robot logs — indexed, comparative, budget-aware, and citing its evidence."
+version = "0.3.0"
+description = "Robot recording integrity auditing with published precision and recall — and an `unassessable` verdict when it cannot tell. MCP server, fleet catalog, training-data gate."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }

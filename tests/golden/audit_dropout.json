@@ -1,4 +1,14 @@
 {
+  "assessability": {
+    "assessable": true,
+    "confidence": 1.0,
+    "coverage_fraction": 1.0,
+    "duration_s": 89.995,
+    "message_fraction": 1.0,
+    "reasons": [],
+    "topics_assessable": 5,
+    "topics_total": 5
+  },
   "caveats": [
     "/scan was silent between t=40.0\u201348.1s; do not compute rates, counts, or coverage over that window.",
     "/scan lost ~10% of its messages; any per-message statistic on this topic is biased and detection-rate style metrics are invalid."

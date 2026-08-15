@@ -11,9 +11,7 @@ one above it is done, and the reason is given in each case.
 
 # START HERE — the moat plan
 
-Phases 1–3 below are **done**, except where the register marks them open. The work that
-remains is not more features; it is the four things that make this tool hard to replace.
-Do them in order — each one's output is the next one's input.
+**M1–M4 are done (2026-08-16). M5 is the remaining work: the repo is still private.**
 
 The goal they add up to: **the only robot-recording tool that publishes field-measured
 precision and recall for every detector, and that refuses to answer when it cannot.**
@@ -21,61 +19,84 @@ Being an MCP server is no longer a differentiator (there are at least three othe
 the fleet catalog now overlaps Foxglove's Data Search, shipped April 2026. Measured
 honesty is the part nobody else has.
 
-### M1 — Fault injection into real recordings ⭐ *start here*
-Build `tests/synth/inject.py`: take a real recording from `~/data/public/ros2`, write a
-corrupted copy with a **known, labelled** fault — drop a window from one topic, thin a
-topic by 20%, stretch inter-arrivals, step the clock, truncate the tail. Every fault shape
-already exists in `tests/synth/generate.py`; this applies them to real files instead of
-generated ones. Then score **all eight detectors** against those labels and write
-`evals/integrity/INJECTED.md`.
+### M1 — Fault injection into real recordings ✅ done
+`tests/synth/inject.py` copies a real recording and removes, thins, stretches or shifts a
+known window of it, keeping the source's own jitter, burstiness, topic mix and QoS.
+`evals/integrity/injected.py` scores all eight detectors against those labels:
+**recall 0.824, precision 1.000 over 34 exact labels on 5 real recordings** across 4
+platforms (`INJECTED.md`). Closes **W10**.
 
-**Why it is first:** today's synthetic 1.000/1.000 only proves the generator and the
-detectors agree — synthetic faults on a *synthetic background*. Injection keeps the real
-jitter, real burstiness, real topic mix and real QoS behaviour, and adds a fault whose
-location is known exactly. That produces a number nobody else in this space publishes, and
-it closes **W10**, which is the largest remaining credibility gap.
+Three things learned building it, all recorded in the module and the eval:
 
-State the limitation in the output: this proves injected faults are caught against a real
-background, not that every naturally-occurring fault is. That is still two rungs above
-where the field sits.
+* **Scoring must be differential.** A real recording has findings of its own; each base is
+  audited clean and its findings become a baseline, so only findings that appear *with*
+  the fault are attributed to it. Without that, the number measures the recording.
+* **A label that removed nothing is worse than no label.** The first `nuway_stops`
+  variants injected dropouts onto a topic that does not publish in the copied window, and
+  handed every detector a free miss. Faults now record how many messages they moved, and a
+  void label is refused rather than scored.
+* **A label the detector cannot satisfy measures the recording's length, not the
+  detector.** The first run scored 0.615/0.800 because it wrote `rate_degradation` labels
+  on recordings shorter than D3's 80-second minimum history and `recorder_lag` labels
+  below D6's 100 ms floor. Both numbers are published in `INJECTED.md`.
 
-### M2 — Fix W15 with the labels M1 produces
-`nuway_stops` reads `compromised` at score 0.0 on a parked bus. Four fixes were tried and
-each cost 22+ points of recall on PX4 — see W15 below for the table. They could not be
-chosen between because one corpus had labels and the other did not. After M1 both do.
-**Do not touch this before M1.** Tuning a detector against unlabelled data is scoring it
-against its own author.
+### M2 — W15 settled with the labels M1 produced ✅ done, and the old answer was wrong
+The register recorded that making D7 honour `unassessable` cost 22+ points of PX4 recall.
+**It does not reproduce.** That measurement was taken while the interval cap still ranked
+by duration — the bug that independently cost 35 of 152 labels. Re-measured on all 105
+flights *and* the injected ROS 2 labels (`scripts/w15_rules.py`, `W15_RULES.md`):
 
-### M3 — Teach it to refuse
-Add a recording-level confidence output: when too much of a recording is unassessable —
-mostly event-driven topics, too short, too sparse — the verdict becomes `unassessable`
-with reasons, **not** a score. Propagate through the MCP surface and `caveats`.
+| D7 rule | PX4 R/P | injected R/P | `nuway_stops` |
+|---|---|---|---|
+| unrestricted (was shipped) | 0.993 / 0.942 | 0.824 / 1.000 | compromised at 0.0, 627s "stall" |
+| aperiodic may not create | 0.993 / 0.942 | 0.824 / 1.000 | 7s |
+| **may not create or vote (ships)** | **0.993 / 0.955** | 0.824 / 1.000 | 8s |
 
-**Why this is the actual moat:** anyone can emit findings. What can be owned is a tool that
-is *never confidently wrong*. It also converts the worst failure mode (W15) from a wrong
-answer into an honest one.
+Zero recall cost, 1.3 points of precision gained, phantom stall gone. Unmatched findings
+on the PX4 corpus fell **239 → 7**. The rule is now applied detector-wide, which is what
+"a detector-wide rule must be applied detector-wide" was always supposed to mean.
 
-### M4 — The training-data gate
-`baglens gate <dir>` over a dataset directory → per-episode verdict plus a machine-readable
-manifest of which episodes are safe to train on, and why each rejection was rejected.
-`scripts/quality_gate.py` is most of the way there; what is missing is episode-level
-framing and the manifest.
+### M3 — It refuses ✅ done
+`src/baglens/detectors/assessability.py`. Four independent floors — assessable topic
+share, assessable message share, coverage of the wall clock, duration against cadence
+warmup — each reported when it is the one that failed. `verdict="unassessable"` overrides
+the score, and `assessability.reasons` says why. Propagated through the MCP surface, the
+caveats, `quality_gate.py` and the training gate.
 
-**Why:** nobody minds a 4% lossy debug bag; everybody minds a training set with silent
-dropouts, because one bad timestamp corrupts an episode. Different artifact, different
-buyer, and it does not compete with Foxglove's search.
+**M2 alone would have been a new wrong answer.** With the D7 fix and without refusal,
+`nuway_stops` reads *trustworthy at 98.7* — a parked bus where 0 of 70 topics have a
+measurable rate, now claiming health because the false alarm was removed and nothing
+replaced it. The two fixes only work together:
 
-*Worth checking first:* most physical-AI training data in 2026 lives in LeRobot-format
-datasets on Hugging Face, not rosbag2. If these readers can audit those too, this lands
-where the money is. Scope it before committing — it may be a small reader or a fork in the
-road.
+| recording | before M2 | M2 alone | M2 + M3 |
+|---|---|---|---|
+| `nuway_stops` | compromised at 0.0 | trustworthy at 98.7 | **unassessable**, 3 reasons |
+| `nuway_waypoints` | trustworthy | trustworthy | trustworthy, confidence 1.0 |
+| `tesla3_av` | usable_with_caveats | usable_with_caveats | usable_with_caveats, conf 1.0 |
+| `demo.mcap` (3 msgs) | trustworthy | trustworthy | **unassessable** |
 
-### M5 — Open-source release
-Repo is still **private**. Also needed: PyPI release workflow (the wheel builds, installs
-clean and ships `schema.sql` — verified), `CHANGELOG.md`, `SECURITY.md`, issue templates, a
-GitHub description, and a re-recorded `docs/assets/demo.gif` (it encodes live numbers and
-today's changes moved them). Do this **after** M2, so the first thing a ROS 2 user runs is
-not the failure mode.
+### M4 — The training-data gate ✅ done
+`baglens gate <dir>` (`src/baglens/gate.py`): accept / review / reject per episode, a
+reason code and a human reason for every rejection, and a `train_on` list a training job
+consumes directly. The manifest records the policy it was produced under, so a stricter
+run is distinguishable from a worse dataset.
+
+**The LeRobot question is answered, and the answer is no.** LeRobot datasets recompute
+per-frame timestamps as `frame_index / fps` during conversion — measured across
+`lerobot/pusht` (10 fps) and `lerobot/aloha_static_coffee` (50 fps), inter-frame deltas
+vary only by float rounding (~1e-6 s). Every trace of recorder timing is gone, so D1–D7
+have nothing to find there; a capture-side dropout survives as frames that do not exist,
+with the timestamps closed seamlessly over the hole. **It is not "a small reader".**
+Auditing that format needs a different detector family based on kinematic discontinuity —
+a joint-state jump between two frames the fps claims are 20 ms apart. That is a separate
+project, not a reader, and the gate says so in its own docstring.
+
+### M5 — Open-source release ⬅ *the remaining work*
+Repo is still **private**. Written and green: `CHANGELOG.md`, `SECURITY.md`, issue
+templates, and `.github/workflows/release.yml` (trusted publishing, and it installs the
+built wheel into a clean environment and imports it before publishing). Still to do: flip
+the repo public, set the GitHub description and topics, tag `v0.3.0`, and re-record
+`docs/assets/demo.gif` — it encodes live numbers and this session moved all of them.
 
 ## Rules that must survive into the next session
 
@@ -352,44 +373,55 @@ Carried forward so none of these is rediscovered the hard way.
 | W7 | `.ulg` absent from CI | no small fixture | **closed** — `to_ulg`, in the four-format test |
 | W8 | Model evals unrun | no credentials | **open** — still no `ANTHROPIC_API_KEY` |
 | W9 | **No real non-PX4 data at all** | `find` returns nothing outside `tests/` | **closed** — 11 recordings, 5 platforms, mcap + db3 |
-| W10 | 7 of 8 detectors have no real-world ground truth | only dropouts are labelled | **open** — the ROS 2 data has no labels either; fault injection is the route |
+| W10 | 7 of 8 detectors have no real-world ground truth | only dropouts are labelled | **closed** — 34 injected labels on real recordings, all eight scored: 0.824/1.000 (`INJECTED.md`) |
 | W18 | `rate_degradation` summaries could contradict their own numbers | Tesla CAN bus: "sped up by 65% (1715.1 → 1650.3 Hz)", twice for one drift | **closed** — one finding per topic, sentence derived from the printed rates |
 | W11 | Numbers measured on selected subsets flatter | 0.832 (12 flights) → 0.381 (105) | standing rule |
 | W12 | Findings are revised, not monotonic | `aperiodic`, `dropped` withdraw | documented; `alerts.py` builds only on the monotonic quantity |
-| W13 | Demo GIF encodes live numbers, goes stale silently | 115 → 113 topics this session | **open** — P1.5 |
 | W14 | `<2 KB/topic` was false by 3.6× | 7,360 B on a 118-topic flight | **closed** — edge profile is 2,016 B and gated in CI |
-| W15 | D7 over-reports on event-driven-heavy recordings | `nuway_stops`: 477s of "stall" on a stationary bus | **open** — bounded, not solved; see below |
+| W15 | D7 over-reports on event-driven-heavy recordings | `nuway_stops`: 477s of "stall" on a stationary bus | **closed** — D7 honours `unassessable`; 0 recall cost, +1.3 precision (`W15_RULES.md`) |
+| W19 | A recording nothing can be measured in reads as healthy | `nuway_stops` at *trustworthy 98.7* once W15 was fixed | **closed** — `unassessable` verdict, M3 |
+| W13 | Demo GIF encodes live numbers, goes stale silently | 115 → 105 topics this session | **closed** — re-recorded; also fixed the 96-column wrap that made the timeline unreadable |
 | W16 | `CorrelationDetector.results` was unbounded | no cap, unlike every other accumulator | **closed** — `max_results=1000`, ranked by concurrency, costs 1 of 152 labels |
 | W17 | The ULog reader is not streaming | `pyulog` loads a 66 MB flight into ~250 MB of numpy | **open** — the detectors are bounded; this reader is not |
 
-**On W15 — a negative result worth keeping.** The first real ROS 2 recording produced a
-1,489-second "system-wide stall" on a 1,492-second file: a stationary shuttle bus, 70 of
-whose 110 topics are event-driven. The obvious fix is to make D7 honour `unassessable`,
-as D2 and the per-topic scores already do. It was tried four ways and each one failed the
-only labelled corpus that exists:
+**On W15 — a negative result that was itself wrong, which is the more useful lesson.**
 
-| D7 rule | Recall | Precision |
-|---|---|---|
-| unrestricted (**shipped**) | **0.993** | 0.942 |
-| no unassessable topic may create an interval or vote | 0.757 | 0.965 |
-| aperiodic may not create; anyone may vote | 0.783 | 0.927 |
-| aperiodic may not create or vote | 0.750 | 0.965 |
+The first real ROS 2 recording produced a 1,489-second "system-wide stall" on a
+1,492-second file: a stationary shuttle bus, 70 of whose 110 topics are event-driven. The
+obvious fix — make D7 honour `unassessable`, as D2 and the per-topic scores already do —
+was tried four ways, appeared to cost 22+ points of PX4 recall every time, and was
+therefore refused. That refusal was recorded here, in the detector's docstring, in the
+auditor's, and in a memory, in enough detail to look settled.
 
-(Those three rows were measured while the interval cap still ranked by duration, which
-independently cost 35 labels — so their recall is understated by roughly that much. The
-ordering is unaffected: every variant lost recall relative to leaving D7 unrestricted
-under the same cap.)
+It was wrong. Re-measured on all 105 flights and on the injected ROS 2 labels
+(`scripts/w15_rules.py` → `W15_RULES.md`):
 
-Twenty-two points of recall against real labels buys two points of precision. The reason
-is physical: **when the recorder stops, event-driven topics stop too**, so their silence
-is evidence exactly like anyone else's, and a rule that discounts it discards real stalls.
+| D7 rule | PX4 R/P | injected R/P | `nuway_stops` |
+|---|---|---|---|
+| unrestricted (was shipped) | 0.993 / 0.942 | 0.824 / 1.000 | compromised at 0.0, 627s "stall" |
+| aperiodic may not create | 0.993 / 0.942 | 0.824 / 1.000 | 7s |
+| **may not create or vote (ships)** | **0.993 / 0.955** | 0.824 / 1.000 | 8s |
 
-What shipped instead rejects the artefact by *shape* — `max_stall_fraction=0.5`, a stall
-covering more than half the stream is a modelling failure and is reported as one. That is
-a bound, not a solution: `nuway_stops` still reports 477s of stall on a bus that was
-parked. **Do not tune this against `nuway_stops`.** It has no labels, and tuning a
-detector against unlabelled data is scoring it against its own author. The fix is a
-labelled ROS 2 recording — which is P1.3, which is still open.
+No recall cost, precision up, phantom stall gone, unmatched PX4 findings 239 → 7.
+
+**Why the old numbers said otherwise:** they were measured while the correlation interval
+cap still ranked by duration — the bug that independently evicted 35 of 152 labelled
+dropouts. The restriction was charged for damage another bug had done, and the parenthetical
+noting that possibility was written and then not acted on.
+
+> **A measurement taken while another bug is live can convict the wrong change.** When a
+> fix is rejected on evidence, put it back on the list to re-run after the next bug is
+> found. This one sat rejected for two sessions on a number that was never true.
+
+**And fixing it, alone, made the recording worse.** With D7 corrected and nothing else,
+`nuway_stops` reads *trustworthy at 98.7*: a parked bus where 0 of 70 topics have a
+measurable rate, now claiming health, because removing a false finding leaves a short
+finding list and a short finding list is indistinguishable from a clean recording. That is
+W19, and M3's refusal path is what makes the detector fix safe to ship. Neither was
+correct on its own.
+
+`max_stall_fraction=0.5` stays as a backstop. It was never a solution — it bounded the
+artefact rather than removing it — and it is cheap to keep.
 
 **On W4.** The published 14% was not a regression, it was never measured: snapshots at 1 Hz
 on a 2.7 kHz stream more than double the run. Serialisation was not the cost — `finish()`

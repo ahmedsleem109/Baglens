@@ -1,32 +1,65 @@
 # Roadmap
 
-**State: Phases 0–7 shipped. Tier 0 and Tier 1 done. Tier 0.1 landed — the detectors have
-now been scored against real flights with labels nobody here wrote. Tier 3.2 landed.**
+**State: Phases 0–7 shipped. Tier 0 and Tier 1 done. `PHASE3.md`'s M1–M4 done
+(2026-08-16). Only the release itself remains.**
 
-Current numbers: 43 tools, 175 tests + 2 skipped, `ruff` and `mypy` green,
-eight detectors at 1.000 precision/recall on synthetic faults with zero false positives
-on 20 clean bags, 56 tool-surface eval cases passing at 0.67% uncited claims, and
-**recall 1.000 / precision 0.381 against PX4's own dropout records** across 105 real
-flights (`evals/integrity/REAL_DATA.md`). That precision is bad and published; see Tier
-1.7 for why it replaced a flattering 0.832 measured on twelve hand-ranked flights.
+Current numbers: 43 tools, 251 tests + 2 skipped, `ruff` and `mypy` green, eight detectors
+at 1.000 precision/recall on synthetic faults with zero false positives on 40 clean bags,
+56 tool-surface eval cases passing at 0.67% uncited claims,
+**recall 0.993 / precision 0.955 against PX4's own dropout records** across 105 real
+flights (`REAL_DATA.md`), and **recall 0.824 / precision 1.000 against 34 faults injected
+into real ROS 2 recordings** (`INJECTED.md`).
 
 ---
 
 ## Start here next session
 
-1. **Tier 1.7 — precision is 0.381 on the full 105-flight corpus, not 0.832 on twelve.**
-   Recall still 1.000. This is now the launch blocker: the README's headline number is
-   measured on a sample that turns out not to be representative, and the blog post's
-   entire claim is that this project publishes its own false-positive rate. Includes a
-   `duration_s` bug that silently invalidates `w_stall` on some flights.
-2. **Tier 2.1 — model-in-the-loop evals.** Built and tested against a scripted client;
-   needs an API key to produce real numbers. Headline artifact for Phase 6.
-3. **Tier 2.3 — ship it.** Requires a human: PyPI, the blog post, ROS Discourse.
+1. **M5 — ship it.** Requires a human: flip the repo public, set the GitHub description
+   and topics, tag `v0.3.0` (the release workflow does the rest), then the blog post,
+   ROS Discourse and r/ROS. Everything else for the release is written and green.
+2. **W8 — model-in-the-loop evals.** Built and tested against a scripted client; needs an
+   API key and real spend to produce numbers.
+3. **W17 — the ULog reader is not streaming.** `pyulog` loads a 66 MB flight into ~250 MB
+   of numpy. The detectors are bounded; this reader is not, and it is the last place the
+   project's central constraint is violated.
 
-Tier 1.6 is done — see below. It did what it claimed on the corpus it was measured
-against; Tier 1.7 is what running that measurement on everything then revealed.
+Do not start on-vehicle work (P2.x beyond what landed) before the offline product has
+users.
 
-Do not start Tier 3.1/3.3 (live source, live-tail) before the offline product has users.
+---
+
+## 2026-08-16 — the honest-number session
+
+Three results worth carrying, in descending order of how much they should change what you
+believe:
+
+**A real background costs 18 points of recall.** Injecting the same eight fault shapes
+into copies of real ROS 2 recordings — real jitter, real burstiness, real topic mix, only
+the fault ours — gives 0.824 recall where the synthetic corpus gives 1.000. That gap is
+now the headline number, because it is the one that describes the field.
+
+**The W15 negative result was wrong, and it was wrong for an instructive reason.** The
+register said making D7 honour `unassessable` cost 22+ points of PX4 recall, so the rule
+was left un-applied to one detector for two sessions. Re-measured, it costs *nothing* and
+gains precision. The original measurement was taken while the interval cap still ranked
+by duration — a separate bug that independently cost 35 of 152 labels. **A measurement
+taken while another bug is live can convict the wrong change.** When a fix is rejected on
+evidence, re-run that evidence after the next bug is found.
+
+**Fixing a false alarm can produce a worse answer than the false alarm.** With D7 fixed
+and nothing else, the parked shuttle bus went from `compromised at 0.0` to
+`trustworthy at 98.7` — a recording where 0 of 70 topics have a measurable rate, now
+claiming health, because removing a false finding leaves a short finding list and a short
+finding list looks exactly like a clean recording. The refusal path (M3) is what makes the
+detector fix safe to ship. Neither was correct alone.
+
+Two smaller ones, both caught by tests rather than by inspection:
+
+- A label that removed no messages is worse than no label: it hands every detector a free
+  miss on a fault that was never injected. Faults now record what they actually did.
+- A label the detector cannot satisfy — a rate ramp on a recording shorter than D3's
+  minimum history — measures the recording's length, not the detector. The first injected
+  run scored 0.615 for that reason; both numbers are published in `INJECTED.md`.
 
 ---
 

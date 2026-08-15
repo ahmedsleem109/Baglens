@@ -168,3 +168,49 @@ export.foxglove_layout(path, topics, focus_s=t)
 The report carries the verdict, the caveats, every finding with the rule that fired and
 the numbers behind it. The trimmed bag is the evidence. The layout hands off to the tool
 your colleagues already use.
+
+---
+
+## 13. "Which of these episodes can I train a policy on?"
+
+```bash
+baglens gate ~/data/episodes --out manifest.json \
+    --require /observation/joint_states,/action --max-gap 0.5
+```
+
+Not a score — a decision per episode with a reason code, plus a `train_on` list your
+training job can read directly:
+
+```
+412 episodes under ~/data/episodes
+  accept 388   review 5   reject 19
+  8214s safe to train on, 402s withheld
+  rejections:
+       11  message_loss
+        5  recorder_stall
+        2  clock_non_monotonic
+        1  unassessable
+```
+
+The limits worth setting deliberately:
+
+* `--require` names the topics you actually train on. Loss and stall limits then apply to
+  those rather than to a diagnostics channel nobody reads.
+* `--max-gap` is the one this tool cannot guess. Fractions are the only scale-free
+  default, but a 15-second hole in a 31-minute recording is 0.8% and passes every
+  fraction limit — while being fifteen seconds the policy will never see. For 30 fps
+  visuomotor data, set it under a second.
+* An episode that comes back `unassessable` is not a bad episode; it is one where too
+  little could be measured to tell. Rejecting those by default is deliberate: accepting
+  them is how an unaudited episode reaches a training set wearing a clean label.
+
+Commit the manifest next to the dataset and diff it when the dataset changes. It records
+the policy it was produced under, so a stricter run is distinguishable from a worse
+dataset.
+
+**Scope.** This reads recordings with real timestamps — `.mcap`, `.db3`, `.bag`, `.ulg`.
+It does not audit LeRobot-format datasets: those recompute per-frame timestamps as
+`frame_index / fps` during conversion, so the timing evidence these detectors read is
+already gone. Measured across `lerobot/pusht` and `lerobot/aloha_static_coffee`, the
+inter-frame deltas vary only by float rounding (~1e-6 s). Gate the recordings, then
+convert.

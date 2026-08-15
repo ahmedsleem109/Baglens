@@ -10,7 +10,7 @@ compromises an investigation regardless of how healthy the other forty are.
 from __future__ import annotations
 
 from ..config import CONFIG, Config
-from ..models import FileIntegrity, Finding, Severity, TopicHealth
+from ..models import Assessability, FileIntegrity, Finding, Severity, TopicHealth
 
 
 def topic_score(
@@ -88,16 +88,25 @@ def overall_score(
     return max(0.0, base)
 
 
-def verdict_for(overall: float, fscore: float, cfg: Config | None = None) -> str:
+def verdict_for(overall: float, fscore: float, cfg: Config | None = None,
+                assessability: Assessability | None = None) -> str:
     """Map scores to a verdict, with file integrity acting as a ceiling rather than a term.
 
     A corrupt file whose surviving half looks healthy would otherwise score well: the
     detectors only ever saw the part that decodes, and that part is internally
     consistent. Integrity is a precondition for trusting anything else, so it caps the
     verdict instead of being averaged into it.
+
+    Assessability comes first and overrides everything, including a healthy score —
+    especially a healthy score. A recording where almost nothing could be measured
+    produces few findings, and few findings look exactly like a clean recording. That is
+    the failure this verdict exists to prevent, and it is why the check cannot be a
+    tie-breaker applied after the score.
     """
     cfg = cfg or CONFIG
     s = cfg.score
+    if assessability is not None and not assessability.assessable:
+        return "unassessable"
     verdict = (
         "trustworthy" if overall >= s.trustworthy
         else "usable_with_caveats" if overall >= s.usable
@@ -111,7 +120,8 @@ def verdict_for(overall: float, fscore: float, cfg: Config | None = None) -> str
 
 
 def build_caveats(
-    findings: list[Finding], topics: list[TopicHealth], fi: FileIntegrity | None
+    findings: list[Finding], topics: list[TopicHealth], fi: FileIntegrity | None,
+    assessability: Assessability | None = None,
 ) -> list[str]:
     """What an analyst must NOT conclude from this data.
 
@@ -120,6 +130,14 @@ def build_caveats(
     confident-but-wrong answers.
     """
     out: list[str] = []
+    # First, and never trimmed away by a budget ladder: if the recording could not be
+    # assessed, every caveat below is a detail about a report that should not be read as
+    # a judgement at all.
+    if assessability is not None and not assessability.assessable:
+        from .assessability import REFUSAL_CAVEAT
+
+        out.append(REFUSAL_CAVEAT)
+        out.extend(f"Not assessable because {reason}." for reason in assessability.reasons)
     by_topic: dict[str, list[Finding]] = {}
     for f in findings:
         if f.topic:

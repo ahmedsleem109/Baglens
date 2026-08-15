@@ -128,23 +128,17 @@ class Auditor:
                 self.cfg, expected_topics=self._expected_topic_count()
             )
 
-    #: `unassessable` is deliberately **not** applied to D7, and this is a measured
-    #: result rather than an oversight. It looks like the obvious fix for the phantom
-    #: stall on `nuway_stops` — a quiet shuttle bus reported as one 1,489-second
-    #: system-wide stall — and every version of it fails the only labelled corpus there
-    #: is. Scored over 105 PX4 flights against the logger's own dropout records:
+    #: `unassessable` **is** applied to D7 as of the W15 re-measurement, so the rule is
+    #: now detector-wide: D2, the per-topic scores, `find_gaps` and D7 all refuse to draw
+    #: conclusions from a topic with no rate model. D7 computes the test itself, from its
+    #: own counters (`CorrelationDetector.unassessable`), because it needs the answer
+    #: during the pass rather than at assembly time.
     #:
-    #:   | D7 rule                                   | recall | precision |
-    #:   |-------------------------------------------|--------|-----------|
-    #:   | unrestricted (shipped)                    | 1.000  | 0.943     |
-    #:   | no unassessable topic may create or vote  | 0.757  | 0.965     |
-    #:   | aperiodic may not create; anyone may vote | 0.783  | 0.927     |
-    #:   | aperiodic may not create or vote          | 0.750  | 0.965     |
-    #:
-    #: Twenty-two points of recall on real labels is not worth two points of precision,
-    #: and the reason is physical: when the recorder stops, event-driven topics stop too,
-    #: so their silence is evidence exactly like anyone else's. The phantom is fixed by
-    #: its actual shape instead — see `CorrelationConfig.max_stall_fraction`.
+    #: The earlier table here recorded that this cost 22+ points of PX4 recall and was
+    #: therefore refused. It does not reproduce: that measurement was taken under an
+    #: interval cap that ranked by duration and independently lost 35 of 152 labels.
+    #: Re-run on all 105 flights and on the injected ROS 2 labels, it costs no recall,
+    #: gains precision, and removes the phantom stall. `evals/integrity/W15_RULES.md`.
 
     def _expected_topic_count(self) -> int:
         """How many topics this recording should carry — the correlation denominator.
@@ -306,6 +300,7 @@ class Auditor:
         return out
 
     def _assemble(self) -> HealthReport:
+        from .assessability import assess
         from .score import build_caveats, file_score, overall_score, topic_score, verdict_for
 
         # Computed once per auditor and carried through `to_state`. It reads 2 MB off the
@@ -439,7 +434,8 @@ class Auditor:
 
         fscore = file_score(self.integrity)
         overall = overall_score(topics, fscore, self.cfg, duration_s=self.t_end)
-        verdict = verdict_for(overall, fscore, self.cfg)
+        assessability = assess(topics, self.t_end, self.timeline, self.cfg)
+        verdict = verdict_for(overall, fscore, self.cfg, assessability)
 
         return HealthReport(
             mission_id=mission_id,
@@ -451,7 +447,8 @@ class Auditor:
             topics=topics,
             file_integrity=self.integrity,
             clock=clock_report,
-            caveats=build_caveats(findings, topics, self.integrity),
+            assessability=assessability,
+            caveats=build_caveats(findings, topics, self.integrity, assessability),
             provenance=prov,
         )
 

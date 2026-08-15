@@ -175,9 +175,11 @@ def main(argv: list[str] | None = None) -> int:
         "Nothing in these recordings says where a fault was. What this shows is that the "
         "readers open real ROS 2 files written by other people's tooling, that the audit "
         "completes in bounded memory, and what the detectors claim — each finding printed "
-        "with its evidence so it can be judged rather than believed. The only measured "
-        "precision and recall in this repository are in `REAL_DATA.md`, against PX4's own "
-        "dropout records.",
+        "with its evidence so it can be judged rather than believed. Measured precision "
+        "and recall live in `REAL_DATA.md` (PX4's own dropout records) and in "
+        "`INJECTED.md`, which puts exact labels onto copies of *these* recordings by "
+        "injecting known faults into them — that is how this corpus acquires ground truth "
+        "without anyone here inventing it.",
         "",
         "## By platform",
         "",

@@ -26,6 +26,11 @@ def _env_int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(f"BAGLENS_{name.upper()}")
+    return raw not in ("0", "false", "no") if raw else default
+
+
 def _env_path(name: str, default: Path) -> Path:
     raw = os.environ.get(f"BAGLENS_{name.upper()}")
     return Path(raw).expanduser() if raw else default
@@ -141,6 +146,50 @@ class CorrelationConfig:
     #: corpus (the longest is seconds) and far below the artefact, so it separates them
     #: without touching a labelled dropout.
     max_stall_fraction: float = _env_float("max_stall_fraction", 0.5)
+    #: W15. Whether a topic with no usable rate model may open a silent interval, and
+    #: whether it may count as co-silent inside someone else's.
+    #:
+    #: Both default to **False**, which reverses a decision this project held for two
+    #: sessions. The register recorded that every restricted variant cost 22+ points of
+    #: recall against PX4's own dropout labels, so D7 alone was left ignoring
+    #: `unassessable` while D2, the per-topic scores and `find_gaps` all honoured it.
+    #: That measurement was taken while the interval cap still ranked by duration — the
+    #: bug that independently cost 35 of 152 labels — and it does not reproduce. Measured
+    #: again on all 105 flights plus the injected ROS 2 labels (`scripts/w15_rules.py`,
+    #: table in `evals/integrity/W15_RULES.md`):
+    #:
+    #:   | D7 rule                        | PX4 R/P     | injected R/P | nuway_stops     |
+    #:   |--------------------------------|-------------|--------------|-----------------|
+    #:   | unrestricted (was shipped)     | 0.993/0.942 | 0.824/1.000  | 627 s "stall"   |
+    #:   | may not create                 | 0.993/0.942 | 0.824/1.000  | 7 s             |
+    #:   | may not create or vote (ships) | 0.993/0.955 | 0.824/1.000  | 8 s             |
+    #:
+    #: Zero recall cost on either labelled corpus, 1.3 points of precision gained, and the
+    #: phantom 627-second stall on a parked shuttle bus gone. Keep both knobs: this is the
+    #: second time the answer has changed, and the next person needs to re-run it rather
+    #: than trust this comment.
+    aperiodic_may_create: bool = _env_bool("aperiodic_may_create", False)
+    aperiodic_may_vote: bool = _env_bool("aperiodic_may_vote", False)
+
+
+@dataclass(frozen=True)
+class AssessabilityConfig:
+    """When the report must refuse to give a verdict. See `detectors/assessability.py`.
+
+    These are floors on how much of a recording was actually checked, not thresholds on
+    how healthy it is. They are set where a reasonable engineer would stop trusting a
+    summary rather than by fitting a corpus: half the traffic, a quarter of the topics,
+    half the wall clock, and long enough for one cadence warmup to complete.
+    """
+
+    #: fraction of topics that must have a measurable publication rate
+    min_topic_fraction: float = _env_float("min_topic_fraction", 0.25)
+    #: share of all messages those topics must carry
+    min_message_fraction: float = _env_float("min_message_fraction", 0.50)
+    #: share of the recording during which some assessable topic was publishing
+    min_coverage: float = _env_float("min_coverage", 0.50)
+    #: below this, no topic can have completed cadence warmup (2x warmup_seconds)
+    min_duration_s: float = _env_float("min_assessable_duration_s", 20.0)
 
 
 @dataclass(frozen=True)
@@ -192,6 +241,7 @@ class Config:
     jitter: JitterConfig = field(default_factory=JitterConfig)
     clock: ClockConfig = field(default_factory=ClockConfig)
     correlation: CorrelationConfig = field(default_factory=CorrelationConfig)
+    assessability: AssessabilityConfig = field(default_factory=AssessabilityConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
 

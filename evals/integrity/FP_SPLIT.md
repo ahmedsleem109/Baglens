@@ -1,6 +1,6 @@
 # P1.1 — the 239 unmatched findings, split by class
 
-Corpus: **105 distinct public PX4 flights**, 677 minutes, 152 labelled dropouts. Matching tolerance ±2s; dropout marks under 200 ms ignored. Generated 2026-08-15.
+Corpus: **105 distinct public PX4 flights**, 677 minutes, 152 labelled dropouts. Matching tolerance ±2s; dropout marks under 200 ms ignored. Generated 2026-08-16.
 
 The published precision scores every `correlation` finding against the ULog dropout labels. But `correlation` emits two different claims, and only one of them is a claim about the recorder:
 
@@ -14,21 +14,19 @@ The published precision scores every `correlation` finding against the ULog drop
 | Class | Findings | Matched | Precision | Labels found | Recall |
 |---|---|---|---|---|---|
 | `system-wide stall` only | 147 | 144 | 0.980 | 148/152 | 0.974 |
-| `subsystem failure` only | 35 | 28 | 0.800 | 31/152 | 0.204 |
-| **both (what is published today)** | 156 | 147 | 0.942 | 151/152 | 0.993 |
+| `subsystem failure` only | 34 | 28 | 0.824 | 31/152 | 0.204 |
+| **both (what is published today)** | 154 | 147 | 0.955 | 151/152 | 0.993 |
 
-The two classes do not sum to the combined row: 26 predicted intervals are produced by merging a subsystem finding into an overlapping stall, so the published denominator is not a count of either claim.
+The two classes do not sum to the combined row: 27 predicted intervals are produced by merging a subsystem finding into an overlapping stall, so the published denominator is not a count of either claim.
 
 ## Where the unmatched findings concentrate
 
 | Flight | Duration | Labelled | Stall | ✗ | Subsystem | ✗ |
 |---|---|---|---|---|---|---|
+| `edf68c41-1621-43fc` | 419s | 0 | 1 | 1 | 3 | 3 |
 | `b080f945-7ad6-4327` | 597s | 2 | 4 | 2 | 2 | 1 |
-| `edf68c41-1621-43fc` | 419s | 0 | 1 | 1 | 2 | 2 |
 | `5ffe57d7-7037-4a53` | 633s | 0 | 0 | 0 | 1 | 1 |
 | `6ca4b9e6-053b-4252` | 141s | 0 | 0 | 0 | 1 | 1 |
-| `a2fe7c84-c8e4-4126` | 156s | 0 | 0 | 0 | 1 | 1 |
-| `b729c072-c831-42b6` | 177s | 0 | 0 | 0 | 1 | 1 |
 | `00bdb07a-8b8d-4018` | 110s | 0 | 0 | 0 | 0 | 0 |
 | `02b71dc2-9b5b-40a3` | 213s | 1 | 0 | 0 | 1 | 0 |
 | `03432416-1bfd-4e31` | 103s | 0 | 0 | 0 | 0 | 0 |
@@ -48,6 +46,8 @@ The two classes do not sum to the combined row: 26 predicted intervals are produ
 | `23c528ee-3948-4e34` | 522s | 0 | 0 | 0 | 0 | 0 |
 | `24ee3ab4-ed08-48da` | 393s | 0 | 0 | 0 | 0 | 0 |
 | `25b25a69-eb1d-4e40` | 106s | 0 | 0 | 0 | 0 | 0 |
+| `27a80339-a4bc-4b29` | 1294s | 18 | 18 | 0 | 3 | 0 |
+| `2894347c-5251-4f67` | 311s | 0 | 0 | 0 | 0 | 0 |
 
-83 of 105 flights carry no dropout label at all and account for 7 of the 9 unmatched findings (78%). On those flights every finding is unmatched by construction, so they set precision without the labels ever being able to confirm one.
+83 of 105 flights carry no dropout label at all and account for 5 of the 7 unmatched findings (71%). On those flights every finding is unmatched by construction, so they set precision without the labels ever being able to confirm one.
 

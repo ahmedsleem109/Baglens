@@ -1,6 +1,6 @@
 # Real ROS 2 recordings
 
-**11 recordings, 5 platforms, 64 minutes, 6.3 GB.** Formats exercised: `db3`, `mcap`. Generated 2026-08-15.
+**11 recordings, 5 platforms, 64 minutes, 6.3 GB.** Formats exercised: `db3`, `mcap`. Generated 2026-08-16.
 
 10 of them, across 4 platforms, were written by `ros2 bag record` on the robot itself. That distinction is load-bearing: a recording converted into MCAP from something else was re-timestamped on the way, so its arrival stream belongs to the converter and no claim about *recorder* behaviour can rest on it. Converted recordings are still worth auditing — they exercise the readers on real topic sets and real message mixes — but they are marked, and they are not evidence about recorders.
 
@@ -10,7 +10,7 @@
 
 | Platform | Recordings | Native | Minutes | Topics (max) | Verdicts |
 |---|---|---|---|---|---|
-| autonomous shuttle bus | 2 | 2 | 56 | 110 | 1× compromised, 1× trustworthy |
+| autonomous shuttle bus | 2 | 2 | 56 | 110 | 1× trustworthy, 1× unassessable |
 | handheld LiDAR-inertial-visual rig | 1 | 0 | 2 | 4 | 1× trustworthy |
 | quadruped / IMU rig | 1 | 1 | 1 | 12 | 1× trustworthy |
 | road vehicle (Tesla Model 3) | 1 | 1 | 2 | 40 | 1× usable_with_caveats |
@@ -20,17 +20,17 @@
 
 | Recording | Platform | Format | Native | Size | Duration | Topics | Messages | Verdict | Score | Audit | Peak RSS |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `dongkkka_00` | short-run rig | `mcap` | yes | 167 MB | 37s | 11 | 30,222 | trustworthy | 99.9 | 1.8s | 40 MB |
-| `dongkkka_01` | short-run rig | `mcap` | yes | 161 MB | 36s | 11 | 29,149 | trustworthy | 100.0 | 1.6s | 40 MB |
-| `dongkkka_02` | short-run rig | `mcap` | yes | 139 MB | 31s | 11 | 25,075 | trustworthy | 99.8 | 1.5s | 40 MB |
-| `dongkkka_03` | short-run rig | `mcap` | yes | 135 MB | 30s | 11 | 24,571 | trustworthy | 100.0 | 1.4s | 40 MB |
-| `dongkkka_04` | short-run rig | `mcap` | yes | 151 MB | 33s | 11 | 27,173 | trustworthy | 100.0 | 1.5s | 40 MB |
-| `dongkkka_05` | short-run rig | `mcap` | yes | 140 MB | 31s | 11 | 25,370 | trustworthy | 99.9 | 1.4s | 40 MB |
-| `fastlivo_hku2` | handheld LiDAR-inertial-visual rig | `mcap` | converted | 886 MB | 105s | 4 | 24,456 | trustworthy | 100.0 | 2.8s | 40 MB |
-| `nuway_stops` | autonomous shuttle bus | `mcap` | yes | 1317 MB | 1492s | 110 | 90,856 | compromised | 0.0 | 11.3s | 198 MB |
-| `nuway_waypoints` | autonomous shuttle bus | `mcap` | yes | 72 MB | 1843s | 5 | 200,144 | trustworthy | 95.0 | 8.5s | 198 MB |
-| `tesla3_av` | road vehicle (Tesla Model 3) | `mcap` | yes | 1098 MB | 148s | 40 | 315,493 | usable_with_caveats | 84.2 | 15.9s | 198 MB |
-| `uniflex_imu` | quadruped / IMU rig | `db3` | yes | 1996 MB | 44s | 12 | 19,345 | trustworthy | 100.0 | 9.6s | 198 MB |
+| `dongkkka_00` | short-run rig | `mcap` | yes | 167 MB | 37s | 11 | 30,222 | trustworthy | 99.9 | 1.9s | 38 MB |
+| `dongkkka_01` | short-run rig | `mcap` | yes | 161 MB | 36s | 11 | 29,149 | trustworthy | 100.0 | 2.4s | 38 MB |
+| `dongkkka_02` | short-run rig | `mcap` | yes | 139 MB | 31s | 11 | 25,075 | trustworthy | 99.8 | 1.6s | 38 MB |
+| `dongkkka_03` | short-run rig | `mcap` | yes | 135 MB | 30s | 11 | 24,571 | trustworthy | 100.0 | 1.6s | 38 MB |
+| `dongkkka_04` | short-run rig | `mcap` | yes | 151 MB | 33s | 11 | 27,173 | trustworthy | 100.0 | 1.8s | 38 MB |
+| `dongkkka_05` | short-run rig | `mcap` | yes | 140 MB | 31s | 11 | 25,370 | trustworthy | 99.9 | 1.8s | 38 MB |
+| `fastlivo_hku2` | handheld LiDAR-inertial-visual rig | `mcap` | converted | 886 MB | 105s | 4 | 24,456 | trustworthy | 100.0 | 9.3s | 38 MB |
+| `nuway_stops` | autonomous shuttle bus | `mcap` | yes | 1317 MB | 1492s | 110 | 90,856 | unassessable | 98.7 | 27.2s | 196 MB |
+| `nuway_waypoints` | autonomous shuttle bus | `mcap` | yes | 72 MB | 1843s | 5 | 200,144 | trustworthy | 95.0 | 9.8s | 196 MB |
+| `tesla3_av` | road vehicle (Tesla Model 3) | `mcap` | yes | 1098 MB | 148s | 40 | 315,493 | usable_with_caveats | 84.2 | 26.0s | 196 MB |
+| `uniflex_imu` | quadruped / IMU rig | `db3` | yes | 1996 MB | 44s | 12 | 19,345 | trustworthy | 100.0 | 19.0s | 196 MB |
 
 ## Known limitation, stated before the results
 
@@ -95,22 +95,22 @@ Source: xrkong/nuway_rosbag. 70 of 110 topics have no measurable cadence.
 
 | Detector | Topic | Window | Severity | Claim |
 |---|---|---|---|---|
-| `correlation` | `—` | 1.9–479.4s | 4 | system-wide stall: 69 topics silent together for 477.49s |
-| `correlation` | `—` | 1342.2–1491.7s | 4 | system-wide stall: 69 topics silent together for 149.49s |
-| `correlation` | `/global_costmap/published_footprint` | 4.1–11.3s | 3 | subsystem failure: /global_costmap/published_footprint and 28 related topics silent together for 7.24s |
-| `correlation` | `/lidar/localisation_merged/cloud` | 4.3–11.3s | 3 | subsystem failure: /lidar/localisation_merged/cloud and 39 related topics silent together for 7.02s |
-| `correlation` | `/lidar/velodyne/front/raw` | 4.3–11.4s | 3 | subsystem failure: /lidar/velodyne/front/raw and 41 related topics silent together for 7.01s |
-| `correlation` | `/lidar/velodyne/front/cloud` | 4.4–11.4s | 3 | subsystem failure: /lidar/velodyne/front/cloud and 42 related topics silent together for 7.00s |
-| `correlation` | `/battery_voltage` | 4.4–11.3s | 3 | subsystem failure: /battery_voltage and 25 related topics silent together for 6.95s |
-| `correlation` | `/battery_percent` | 4.4–11.3s | 3 | subsystem failure: /battery_percent and 27 related topics silent together for 6.95s |
-| `correlation` | `/driving_mode` | 4.4–11.4s | 3 | subsystem failure: /driving_mode and 43 related topics silent together for 6.99s |
-| `correlation` | `/speed_mode` | 4.4–11.4s | 3 | subsystem failure: /speed_mode and 45 related topics silent together for 6.99s |
-| `correlation` | `/speed_mode_stamped` | 4.4–11.4s | 3 | subsystem failure: /speed_mode_stamped and 48 related topics silent together for 6.99s |
-| `correlation` | `/tf` | 4.4–11.3s | 3 | subsystem failure: /tf and 28 related topics silent together for 6.93s |
-| `correlation` | `/lidar_safety/rear_left/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_safety/rear_left/cloud and 43 related topics silent together for 6.92s |
-| `correlation` | `/lidar_safety/rear_right/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_safety/rear_right/cloud and 46 related topics silent together for 6.92s |
-| `correlation` | `/lidar_localisation/rear/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_localisation/rear/cloud and 43 related topics silent together for 6.92s |
-| … | | | | 78 more |
+| `correlation` | `—` | 3.7–11.8s | 4 | system-wide stall: 48 topics silent together for 8.05s |
+| `correlation` | `/global_costmap/published_footprint` | 4.1–11.3s | 3 | subsystem failure: /global_costmap/published_footprint and 22 related topics silent together for 7.24s |
+| `correlation` | `/lidar/localisation_merged/cloud` | 4.3–11.3s | 3 | subsystem failure: /lidar/localisation_merged/cloud and 30 related topics silent together for 7.02s |
+| `correlation` | `/lidar/localisation_merged/scan` | 4.3–11.4s | 3 | subsystem failure: /lidar/localisation_merged/scan and 34 related topics silent together for 7.10s |
+| `correlation` | `/lidar/velodyne/front/raw` | 4.3–11.4s | 3 | subsystem failure: /lidar/velodyne/front/raw and 32 related topics silent together for 7.01s |
+| `correlation` | `/lidar/velodyne/front/cloud` | 4.4–11.4s | 3 | subsystem failure: /lidar/velodyne/front/cloud and 33 related topics silent together for 7.00s |
+| `correlation` | `/battery_voltage` | 4.4–11.3s | 3 | subsystem failure: /battery_voltage and 20 related topics silent together for 6.95s |
+| `correlation` | `/battery_percent` | 4.4–11.3s | 3 | subsystem failure: /battery_percent and 21 related topics silent together for 6.95s |
+| `correlation` | `/lidar/velodyne/rear/raw` | 4.4–11.4s | 3 | subsystem failure: /lidar/velodyne/rear/raw and 35 related topics silent together for 7.08s |
+| `correlation` | `/lidar_safety/rear_left/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_safety/rear_left/cloud and 29 related topics silent together for 6.92s |
+| `correlation` | `/lidar_safety/rear_right/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_safety/rear_right/cloud and 32 related topics silent together for 6.92s |
+| `correlation` | `/lidar_localisation/rear/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_localisation/rear/cloud and 29 related topics silent together for 6.92s |
+| `correlation` | `/lidar_localisation/front/cloud` | 4.4–11.3s | 3 | subsystem failure: /lidar_localisation/front/cloud and 30 related topics silent together for 6.91s |
+| `correlation` | `/local_costmap/costmap_raw` | 4.4–11.3s | 3 | subsystem failure: /local_costmap/costmap_raw and 34 related topics silent together for 6.91s |
+| `correlation` | `/drive_cmds_stamped` | 4.4–11.3s | 3 | subsystem failure: /drive_cmds_stamped and 33 related topics silent together for 6.90s |
+| … | | | | 71 more |
 
 
 ### `nuway_waypoints` — autonomous shuttle bus

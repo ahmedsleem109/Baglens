@@ -1,13 +1,22 @@
 # baglens
 
-**An MCP server that lets an agent investigate a fleet of robot logs — indexed, comparative, budget-aware, and citing its evidence.**
+**Robot recording integrity, with published precision and recall — and a verdict of
+`unassessable` when it cannot tell.**
 
-Existing rosbag MCP servers let an LLM *open a bag*. `baglens` audits whether the
-recording can be trusted at all, remembers your whole corpus, and answers the question
-that actually matters when something breaks: **has this happened before?**
+Existing rosbag tools let you *open a bag*. `baglens` audits whether the recording can be
+trusted at all, tells an agent in writing what the data cannot support, remembers your
+whole corpus, and answers the question that matters when something breaks: **has this
+happened before?**
+
+Two things here are unusual enough to state up front. Every detector's accuracy is
+measured against labels this project did not write — including on real recordings, where
+the honest number is **0.824 recall**, not the 1.000 the synthetic corpus reports. And
+when too little of a recording can be measured, it returns `unassessable` with reasons
+instead of a score, because a tool that is never confidently wrong is worth more than one
+that always has an answer.
 
 Here it is on a public PX4 flight, deciding that a magnetometer outage was not the
-magnetometer — 115 topics went silent together, so the recorder stalled:
+magnetometer — 105 topics went silent together, so the recorder stalled:
 
 ![baglens auditing a real PX4 flight](docs/assets/demo.gif)
 
@@ -102,6 +111,31 @@ generator in this repository. Perfect scores mean the detectors and the generato
 about what a fault looks like — they are a regression gate and a floor, not evidence of
 field accuracy.
 
+### The same detectors, same faults, on real recordings
+
+Here is what those eight perfect scores are worth once the *background* is real. The same
+fault shapes are injected into copies of real `ros2 bag record` files, which keep the
+robot's own jitter, burstiness, topic mix and QoS — only the fault is ours, and we know
+exactly where we put it ([`INJECTED.md`](evals/integrity/INJECTED.md)):
+
+| Corpus | Background | Labels | Recall | Precision |
+|---|---|---|---|---|
+| Synthetic fault matrix | generated | 200 bags | 1.000 | 1.000 |
+| **Injected into real recordings** | **real** | **34 exact** | **0.824** | **1.000** |
+| PX4 dropout records | real | 152, not ours | 0.993 | 0.955 |
+
+**A real background costs 18 points of recall, and that is the number worth publishing.**
+Scoring is differential: every base recording is also copied clean and audited, so a
+finding the clean copy already had is attributed to the recording rather than to the
+injected fault — otherwise the number measures the recording's health, not the detector's
+accuracy. Five of the six misses are on one recording: a shuttle bus parked for its entire
+run, which the tool now declines to grade at all (see below).
+
+This proves injected faults are caught against a real background. It does not prove every
+naturally-occurring fault is — injection can only produce shapes someone thought of. That
+is one rung above a synthetic corpus and one rung below an instrumented robot, and it is
+stated that way in the eval rather than rounded up.
+
 ### The same detectors on real flights, against labels we did not write
 
 PX4's logger writes a dropout record into the `.ulg` whenever it could not keep up. That
@@ -111,13 +145,13 @@ Scored against it across **105 distinct public flights** from review.px4.io — 
 
 | | Recall | Precision | F1 |
 |---|---|---|---|
-| `correlation` vs. PX4's own dropout records | **0.993** | **0.942** | 0.967 |
+| `correlation` vs. PX4's own dropout records | **0.993** | **0.955** | 0.974 |
 
-**151 of the 152 dropouts the recorder admitted to were found, and nineteen out of twenty
-reported stalls match one.** The one miss is not a detection failure but a *bounded-state*
-one: the detector keeps at most 1000 silent intervals, and on the busiest flight in the
-corpus one real stall is evicted. Streaming with fixed memory is the constraint the whole
-library is built on, so that trade is deliberate and stated rather than quietly relaxed.
+**151 of the 152 dropouts the recorder admitted to were found.** The one miss is not a
+detection failure but a *bounded-state* one: the detector keeps at most 1000 silent
+intervals, and on the busiest flight in the corpus one real stall is evicted. Streaming
+with fixed memory is the constraint the whole library is built on, so that trade is
+deliberate and stated rather than quietly relaxed.
 
 This table read `0.381` until the false positives were split by class and looked at, and
 the history is the point. `correlation` makes two different claims — `system-wide stall`
@@ -185,7 +219,34 @@ overall     = (0.5·min(scores) + 0.3·mean(scores) + 0.2·file_score)
               where `scores` covers only topics we can actually assess
 
 ≥85 trustworthy   ·   60–85 usable with caveats   ·   <60 compromised
+
+                     unassessable — a refusal to grade, overriding all of the above
 ```
+
+### It refuses
+
+`unassessable` is not a worse grade than `compromised`; it is the tool declining to
+answer. Four floors, each reported when it is the one that failed: too few topics with a
+measurable rate, too little of the traffic on those topics, too little of the wall clock
+covered, or too short to establish a baseline at all.
+
+This exists because of one recording. An autonomous shuttle bus, parked for its entire
+1,492-second run, 70 of whose 110 topics are event-driven, was published as `compromised`
+at score **0.0** — a confident, precise, completely wrong judgement about a recording where
+**0 of 70 topics have a measurable publication rate.** Fixing the detector that produced
+the false alarm was necessary and, on its own, made it worse: the same file then read
+*trustworthy at 98.7*, because a recording nothing can be measured in produces few
+findings, and few findings look exactly like a clean recording.
+
+```
+verdict: unassessable   (confidence 0.00)
+  only 0 of 70 topics have a measurable publication rate (0%, floor 25%) — the rest
+    are event-driven or too sparse, so most of this recording was never checked
+  assessable topics published during 0% of the recording (floor 50%) — the rest is
+    silence that cannot be distinguished from a robot that was simply idle
+```
+
+Anyone can emit findings. What is worth owning is a tool that is never confidently wrong.
 
 Weighting the *minimum* heavily is deliberate: one broken critical topic compromises an
 investigation regardless of how healthy the other forty are. `gap_penalty` is measured
@@ -274,6 +335,38 @@ every result is a typed model, carries provenance, and respects a token budget.
 
 **Tool-surface eval:** 56 cases, 100% pass rate, 0.67% uncited claims, 773 tokens per
 case on average — [`evals/RESULTS.md`](evals/RESULTS.md).
+
+## The training-data gate
+
+```bash
+baglens gate ~/data/episodes --out manifest.json \
+    --require /observation/joint_states,/action --max-gap 0.5
+```
+
+Nobody minds a 4% lossy debug bag. A training set is different, because the harm is silent
+and delayed: an imitation-learning pipeline assumes its streams are aligned, so when the
+recorder stalls for 200 ms nothing errors — the action at *t* is simply paired with an
+observation from *t−200 ms*, and the model learns that. You find out weeks later, in
+evaluation, having already paid for the run.
+
+So the output is not a score. It is a manifest: accept / review / reject per episode, a
+reason code and a human reason for every rejection, and a `train_on` list a training job
+reads directly.
+
+```
+412 episodes under ~/data/episodes
+  accept 388   review 5   reject 19
+  rejections:   11 message_loss · 5 recorder_stall · 2 clock_non_monotonic · 1 unassessable
+```
+
+"3.2% of this episode fell inside a recorder stall" is actionable. "Score 61" is not.
+
+**Scope, stated rather than implied.** This reads recordings with real timestamps. It does
+**not** audit LeRobot-format datasets: those recompute per-frame timestamps as
+`frame_index / fps` during conversion — measured across `lerobot/pusht` and
+`lerobot/aloha_static_coffee`, inter-frame deltas vary only by float rounding (~1e-6 s) —
+so the timing evidence these detectors read is already gone by then. Gate the recordings,
+then convert.
 
 ## Configuration
 

@@ -168,6 +168,13 @@ def register(mcp: Any) -> None:
         by severity, a per-topic health table, and explicit `caveats` describing what
         this recording cannot prove.
 
+        If `verdict` is "unassessable", the tool is refusing to grade this recording
+        rather than grading it badly: too few of its topics had a measurable rate, too
+        little of the wall clock was covered, or it was too short to establish a baseline.
+        `assessability.reasons` says which. In that case a short finding list means the
+        checks did not run, NOT that the recording is clean — say so rather than
+        reporting it as healthy.
+
         Start here, then use health.explain_finding to drill into a specific finding,
         health.find_gaps to see whether a silence was system-wide, and
         health.clock_report for the recorder-lag curve.

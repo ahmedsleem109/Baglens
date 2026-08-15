@@ -15,10 +15,15 @@ State: one pruned interval list per topic, bounded to the 60 s window, plus at m
 ``max_results`` intervals of history behind it — ranked by concurrency, because the
 longest silences in a recording are isolated slow topics and the stalls are seconds long.
 
-This detector deliberately does **not** honour `unassessable`, unlike D2 and the per-topic
-scores. Four versions of that rule were measured against PX4's own dropout labels and each
-cost 22+ points of recall: when the recorder stops, event-driven topics stop too, so their
-silence is evidence like anyone else's. See W15 in `PHASE3.md` before re-adding it.
+This detector honours `unassessable` — a topic with no usable rate model may neither open
+a silent interval nor count as co-silent inside someone else's. **That reverses the rule
+this file shipped for two sessions**, and the reversal is the point: the earlier
+measurement said the restriction cost 22+ points of PX4 recall, but it was taken while the
+interval cap still ranked by duration, which independently cost 35 of 152 labels. Measured
+again on all 105 flights and on the injected ROS 2 labels, the restriction costs no recall
+at all, gains 1.3 points of precision, and removes a 627-second phantom stall from a
+parked shuttle bus. See `CorrelationConfig.aperiodic_may_create` and
+`evals/integrity/W15_RULES.md`; `scripts/w15_rules.py` re-runs the whole table.
 """
 
 from __future__ import annotations
@@ -95,6 +100,8 @@ class CorrelationDetector:
         threshold = max(self.k * period, self.cfg.gap.floor_s)
         if dt <= threshold:
             return
+        if not self.cfg.correlation.aperiodic_may_create and self.unassessable(topic):
+            return
 
         interval = SilentInterval(topic, t - dt, t)
         dq = self.window.setdefault(topic, deque())
@@ -149,6 +156,28 @@ class CorrelationDetector:
         for iv in self.results:
             self.by_topic.setdefault(iv.topic, []).append(iv)
 
+    def unassessable(self, topic: str) -> bool:
+        """Does this topic lack a rate model that would make its silence meaningful?
+
+        The same test `Auditor._unassessable_reason` applies at assembly time — a learned
+        rate far above the rate the topic actually sustained means the period describes
+        the spacing *inside* a burst — but computed from this detector's own counters, so
+        it is available during the pass rather than after it. Nothing new is stored: the
+        period, the count and the first/last timestamps are already here.
+
+        Only consulted when `aperiodic_may_create` or `aperiodic_may_vote` is off. Both
+        are on by default; see W15.
+        """
+        p = self.period.get(topic)
+        n = self.count.get(topic, 0)
+        if not p or n < 2:
+            return True  # no baseline yet: nothing to judge it against
+        span = self.last_seen[topic] - self.first_seen[topic]
+        sustained = n / span if span > 0 else 0.0
+        if sustained <= 0:
+            return True
+        return (1.0 / p) > self.cfg.cadence.aperiodic_ratio * sustained
+
     def _nominal(self, topic: str) -> float:
         """The spacing this topic is expected to keep, or 0.0 when not yet knowable.
 
@@ -187,6 +216,11 @@ class CorrelationDetector:
         # denominator too, so a short interval is judged only by the topics fast enough
         # to have been able to notice it.
         eligible = [tp for tp in active_before if 0.0 < self._nominal(tp) < length]
+        if not self.cfg.correlation.aperiodic_may_vote:
+            # Out of the denominator as well as the numerator. Excluding a topic from the
+            # numerator alone strips a genuine stall of the bystanders that make it look
+            # like one, and PX4 recall fell to 0.263 when that was tried.
+            eligible = [tp for tp in eligible if not self.unassessable(tp)]
         if not eligible:
             return
         co: list[str] = []

@@ -1,0 +1,95 @@
+name: release
+
+# Publishes to PyPI when a version tag is pushed. Trusted publishing (OIDC) rather than a
+# stored API token: there is no secret to leak, and the only thing that can publish is
+# this workflow in this repository.
+#
+# Before tagging: bump `version` in pyproject.toml, update CHANGELOG.md, and make sure the
+# published numbers were regenerated after the last detector change. A release that ships
+# a stale README number is the one failure mode this project cannot afford.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --all-extras --dev
+
+      # The gates run again here rather than trusting the tagged commit's CI run: a tag
+      # can point anywhere, including at a commit CI never saw.
+      - name: tests
+        run: uv run pytest -q
+      - name: lint and types
+        run: |
+          uv run ruff check .
+          uv run mypy
+
+      - name: build the wheel and sdist
+        run: uv build
+
+      # The wheel has shipped without `schema.sql` before. An installed-package check is
+      # the only thing that catches a packaging bug, because every test until this point
+      # has been running against the source tree.
+      # `uv venv` rather than `python -m venv`: the latter needs `ensurepip`, which is
+      # absent on a Debian/Ubuntu python without `python3-venv` installed, and a release
+      # check that only runs on some machines is not a check.
+      - name: install the wheel into a clean environment and import it
+        run: |
+          uv venv /tmp/wheeltest --python 3.13
+          VIRTUAL_ENV=/tmp/wheeltest uv pip install --quiet dist/*.whl
+          /tmp/wheeltest/bin/python - <<'PY'
+          import importlib.resources as r
+
+          import baglens
+          from baglens.server import build_server
+
+          print("baglens", baglens.__version__)
+          schema = r.files("baglens.catalog").joinpath("schema.sql")
+          assert schema.is_file(), "schema.sql missing from the wheel"
+          build_server()
+          print("server built")
+
+          import os
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if tag.startswith("v"):
+              assert baglens.__version__ == tag[1:], (
+                  f"tag {tag} does not match packaged version {baglens.__version__}"
+              )
+              print("version matches tag")
+          PY
+          # the console script, not just the import: `baglens gate` is a user-facing
+          # entry point and a packaging mistake would only show up here
+          /tmp/wheeltest/bin/baglens gate --help > /dev/null
+          echo "console script ok"
+      - name: check the metadata renders on PyPI
+        run: |
+          uv run --with twine twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

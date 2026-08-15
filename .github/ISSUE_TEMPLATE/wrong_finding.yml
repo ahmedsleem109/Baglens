@@ -1,0 +1,57 @@
+name: A finding is wrong
+description: baglens reported something that is not true of your recording, or missed something that is
+labels: ["detector"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These are the most valuable reports this project gets. Every published
+        precision/recall number moved because someone pointed at a recording where the
+        detectors were wrong — see `evals/integrity/`.
+
+        You do not need to share the recording. A description of its shape is often
+        enough, and `tests/synth/generate.py` can usually reproduce that shape.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which way is it wrong?
+      options:
+        - False positive — it reported a fault that is not there
+        - False negative — it missed a fault that is there
+        - Right fault, wrong description, window, or topic
+        - The verdict or score does not match the findings
+    validations:
+      required: true
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding
+      description: Paste the finding, or the whole `health.audit_recording` output.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: truth
+    attributes:
+      label: What is actually true of the recording
+      description: >
+        How do you know? A logger's own dropout record, a hardware trace, a colleague who
+        watched it happen, and "I looked at the timestamps myself" are all fine answers —
+        just say which.
+    validations:
+      required: true
+  - type: input
+    id: recording
+    attributes:
+      label: The recording
+      description: Format, duration, topic count, rate of the affected topic. Whatever you can share.
+      placeholder: mcap, 1492 s, 110 topics, the affected topic runs at ~5 Hz in bursts
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: baglens version
+      placeholder: "0.2.0"
+    validations:
+      required: true

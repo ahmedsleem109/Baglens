@@ -1,6 +1,6 @@
 # Detector performance on real flight data
 
-Corpus: **105 distinct public PX4 flights** from review.px4.io (16 duplicate uploads removed by content hash), 677 minutes of flight. Generated 2026-08-15.
+Corpus: **105 distinct public PX4 flights** from review.px4.io (16 duplicate uploads removed by content hash), 677 minutes of flight. Generated 2026-08-16.
 
 **Labels are not ours.** PX4's logger writes a dropout record whenever it could not keep up. That record is the ground truth here — authored by the flight controller, on hardware we have never touched. Every other precision/recall number in this repository is scored against faults this repository injected.
 
@@ -9,10 +9,10 @@ Matching tolerance ±2s. Dropout marks shorter than 200 ms are ignored.
 | Metric | Value |
 |---|---|
 | Labelled dropouts | 152 |
-| Correlation findings | 156 |
+| Correlation findings | 154 |
 | **Recall** | **0.993** |
-| **Precision** | **0.942** |
-| F1 | 0.967 |
+| **Precision** | **0.955** |
+| F1 | 0.974 |
 | Recording time lost to logger stalls | 307s of 40629s (0.8%) |
 
 ## Per flight
@@ -94,7 +94,7 @@ Matching tolerance ±2s. Dropout marks shorter than 200 ms are ignored.
 | `9ebc5e26-8143-47f1` | 332s | 0 | 0 | 0 | 0.0s |
 | `a1f88da6-1425-4326` | 1573s | 0 | 0 | 0 | 0.0s |
 | `a272e5ff-375e-47f4` | 331s | 0 | 0 | 0 | 0.0s |
-| `a2fe7c84-c8e4-4126` | 156s | 0 | 1 | 0 | 0.0s |
+| `a2fe7c84-c8e4-4126` | 156s | 0 | 0 | 0 | 0.0s |
 | `a5abe811-7c23-43d4` | 357s | 0 | 0 | 0 | 0.0s |
 | `a7fa73ea-bb43-4ba8` | 415s | 0 | 0 | 0 | 0.0s |
 | `a84201ab-614f-4982` | 178s | 0 | 0 | 0 | 0.0s |
@@ -103,7 +103,7 @@ Matching tolerance ±2s. Dropout marks shorter than 200 ms are ignored.
 | `af4d800e-5e77-4f4e` | 109s | 0 | 0 | 0 | 0.0s |
 | `afb54851-ad72-4664` | 270s | 0 | 0 | 0 | 0.0s |
 | `b1817cc4-3a6d-4fc9` | 192s | 0 | 0 | 0 | 0.0s |
-| `b729c072-c831-42b6` | 177s | 0 | 1 | 0 | 0.0s |
+| `b729c072-c831-42b6` | 177s | 0 | 0 | 0 | 0.0s |
 | `b9557df8-e028-4c28` | 782s | 0 | 0 | 0 | 0.0s |
 | `c611849c-33e0-4bac` | 361s | 0 | 0 | 0 | 0.0s |
 | `cb59d4eb-a747-4a84` | 102s | 0 | 0 | 0 | 0.0s |

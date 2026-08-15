@@ -1,4 +1,14 @@
 {
+  "assessability": {
+    "assessable": true,
+    "confidence": 1.0,
+    "coverage_fraction": 1.0,
+    "duration_s": 89.999,
+    "message_fraction": 1.0,
+    "reasons": [],
+    "topics_assessable": 5,
+    "topics_total": 5
+  },
   "caveats": [
     "At least one silence was system-wide, so it reflects the recording host rather than any sensor; do not attribute those windows to a specific subsystem."
   ],
