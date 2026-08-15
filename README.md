@@ -6,6 +6,18 @@ Existing rosbag MCP servers let an LLM *open a bag*. `baglens` audits whether th
 recording can be trusted at all, remembers your whole corpus, and answers the question
 that actually matters when something breaks: **has this happened before?**
 
+Here it is on a public PX4 flight, deciding that a magnetometer outage was not the
+magnetometer — 115 topics went silent together, so the recorder stalled:
+
+![baglens auditing a real PX4 flight](docs/assets/demo.gif)
+
+Every figure in that recording is real and reproducible: `scripts/demo.py` drives the
+same `call_tool` entrypoint an MCP client uses, against
+[flight `588ff157`](https://review.px4.io) from review.px4.io. The audit genuinely takes
+~20s on 845k messages; only the silent wait is compressed in playback.
+
+The shape of a full report:
+
 ```
 > Audit ~/data/mission_204.mcap before I draw any conclusions from it.
 
@@ -91,17 +103,32 @@ field accuracy.
 
 PX4's logger writes a dropout record into the `.ulg` whenever it could not keep up. That
 is ground truth authored by the flight controller, on hardware nobody here has touched.
-Scored against it across twelve distinct public flights from review.px4.io — 99 minutes,
-100 labelled dropouts:
+Scored against it across **105 distinct public flights** from review.px4.io — 677 minutes,
+152 labelled dropouts:
 
 | | Recall | Precision | F1 |
 |---|---|---|---|
-| `correlation` vs. PX4's own dropout records | **1.000** | **0.832** | 0.908 |
+| `correlation` vs. PX4's own dropout records | **1.000** | **0.381** | 0.552 |
 
-Every dropout the recorder admitted to was found. The precision gap is the honest half:
-on flights the logger marked clean, the detector still reports the occasional stall.
-Method, per-flight breakdown and what this does *not* measure are in
-[`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md).
+**Every dropout the recorder admitted to was found. Two out of three reported stalls
+match no label.** That precision number is bad, it is published anyway, and it is the
+most useful number here — read the next paragraph before drawing a conclusion from it.
+
+An earlier version of this table read `0.832` across twelve flights, and the difference is
+a lesson rather than a regression. Those twelve were chosen by `audit_corpus.py`'s
+interest ranking, which is a selection effect: they were the flights with the most going
+on, so most of their stalls were real. Running the identical eval over the whole corpus —
+105 flights instead of 12 — moved precision to 0.381 with recall unchanged. The detector
+did not get worse; the measurement got honest. A fix made in the same session improved
+precision from 0.365 to 0.381 on the full corpus (and 0.832 → 0.917 on the old twelve),
+which is also the size of gap between a flattering sample and a representative one.
+
+What this means in practice: **trust a stall finding's recall, verify its precision.**
+If `correlation` says the recording was clean, believe it. If it reports a stall, the
+co-silent topic list is the evidence to check — that is why every finding carries one.
+Method, per-flight breakdown, and what this does *not* measure are in
+[`evals/integrity/REAL_DATA.md`](evals/integrity/REAL_DATA.md); the plan for closing the
+precision gap is Tier 1.7 in [`ROADMAP.md`](ROADMAP.md).
 
 **What real data broke, and what fixed it.** The first run against those flights graded
 every single one `compromised`, at 47–56/100, with 900–3000 findings each — against a

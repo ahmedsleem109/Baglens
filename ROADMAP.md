@@ -3,21 +3,28 @@
 **State: Phases 0–7 shipped. Tier 0 and Tier 1 done. Tier 0.1 landed — the detectors have
 now been scored against real flights with labels nobody here wrote. Tier 3.2 landed.**
 
-Current numbers: 43 tools, 143 tests + 2 skipped, `ruff` and `mypy` green,
+Current numbers: 43 tools, 175 tests + 2 skipped, `ruff` and `mypy` green,
 eight detectors at 1.000 precision/recall on synthetic faults with zero false positives
 on 20 clean bags, 56 tool-surface eval cases passing at 0.67% uncited claims, and
-**recall 1.000 / precision 0.861 against PX4's own dropout records** across six real
-flights (`evals/integrity/REAL_DATA.md`).
+**recall 1.000 / precision 0.381 against PX4's own dropout records** across 105 real
+flights (`evals/integrity/REAL_DATA.md`). That precision is bad and published; see Tier
+1.7 for why it replaced a flattering 0.832 measured on twelve hand-ranked flights.
 
 ---
 
 ## Start here next session
 
-1. **Tier 2.1 — model-in-the-loop evals.** Built and tested against a scripted client;
+1. **Tier 1.7 — precision is 0.381 on the full 105-flight corpus, not 0.832 on twelve.**
+   Recall still 1.000. This is now the launch blocker: the README's headline number is
+   measured on a sample that turns out not to be representative, and the blog post's
+   entire claim is that this project publishes its own false-positive rate. Includes a
+   `duration_s` bug that silently invalidates `w_stall` on some flights.
+2. **Tier 2.1 — model-in-the-loop evals.** Built and tested against a scripted client;
    needs an API key to produce real numbers. Headline artifact for Phase 6.
-2. **Tier 2.2 — the README demo.** Now recordable: there is a real finding to show, and
-   the tool no longer cries wolf on the recording you would demo it against.
 3. **Tier 2.3 — ship it.** Requires a human: PyPI, the blog post, ROS Discourse.
+
+Tier 1.6 is done — see below. It did what it claimed on the corpus it was measured
+against; Tier 1.7 is what running that measurement on everything then revealed.
 
 Do not start Tier 3.1/3.3 (live source, live-tail) before the offline product has users.
 
@@ -177,6 +184,142 @@ real gaps, and the gap detector scores 1.000/1.000 against PX4's own labels. It 
 **Done when:** a clean real flight reads `usable_with_caveats` or better, one stall
 produces one finding, and `evals/integrity/real_data.py` still shows recall ≥ 0.95.
 
+## Tier 1.6 — What recording the demo exposed
+
+Tier 1.5 fixed the *stall* rollup and it holds: of five real flights re-audited,
+`d9ab45ca` (96.1), `7373e4bf` (94.4) and `a5abe811` (94.3) read `trustworthy` and
+`588ff157` reads `usable_with_caveats` (60.2). The claim that a clean real flight no
+longer reads `compromised` is true.
+
+Four defects survived it. Two are fixed; two are not, because they are calibration
+decisions rather than mistakes and should not be made in passing.
+
+**Fixed — `explain_finding` clobbered the finding's own evidence.** It merged report-level
+context over `finding.evidence` with un-prefixed keys, so `duration_s` on a correlation
+finding — the stall's duration, 6.31s — was silently replaced by the *recording's*
+311.97s. Under the key an agent is most likely to cite, on the tool whose entire pitch is
+provenance. Report keys are now `recording_*`. The demo caught it because the script
+printed the number next to a summary that said 6.31s.
+
+**Fixed — budget trimming cut interpretations mid-word.** `interpretation[:120]` produced
+`"…the classic signature of"`, which reads as a crash rather than a trim. Now elides on a
+word boundary with `…`.
+
+**Fixed — a "system-wide stall" was a fraction with no floor.** Flight `fddab288` scored
+**0.0 / compromised** on a 220.89s "system-wide stall: 11 topics silent together".
+Verified against raw pyulog, independent of baglens:
+
+- 105 of its 117 topics have their first sample at t≈271–279s; only 33 samples exist in
+  the whole 50.7–271.6s window, across 16 event-driven topics.
+- PX4's own logger recorded **6 dropouts totalling 3.18s** for this flight.
+
+So the file is a 367s log that sat on the ground for 271s under reduced pre-arm logging.
+`concurrency = len(co_silent) / len(active_before)` counted only topics seen *before* the
+gap, so 11 of ~14 known-at-the-time topics cleared the 0.7 threshold while being 9% of the
+recording's real topic set. `w_stall` then billed 60% of the recording as lost → 0.0.
+
+The denominator is now floored on the reader's declared topic count — topics with
+messages, so a declared-but-never-published channel cannot depress it — and `max()` means
+it can only ever *lower* concurrency, and only while topics are still arriving. A source
+that cannot enumerate its topics passes 0 and gets the old behaviour, so the live path is
+unaffected. `expected_topics` travels in the checkpoint, because a resumed pass sees only
+its own half's topics and would otherwise score the two halves on different scales.
+
+`fddab288` now reads **81.2 / usable_with_caveats** with a 1.91s longest stall, consistent
+with the 3.18s its logger recorded. The other five flights moved by at most 0.2
+(`0ca5dafd` 45.1 → 45.3); `588ff157`, the demo flight, is byte-identical.
+
+**Fixed — `caveats` repeated one sentence 49 times.** The `588ff157` audit returned 65
+caveats, 49 of them `"<topic> changed rate substantially during the recording"` — the
+one-event-many-findings problem Tier 1.5 solved for stalls, unsolved for
+`rate_degradation`. That template is now emitted once, naming the count and the first
+eight topics. The gap and dropped caveats stay per-topic because each carries a window or
+a percentage; this one carried nothing but a name. 65 → 17 caveats.
+
+**Fixed — `find_gaps` reported topics it had already judged unassessable.** `/event` on
+`588ff157` learns 931 Hz from the spacing inside a burst and reported a 131s gap with
+121,936 "lost" messages, which sorted straight to the top of a longest-first list.
+`_unassessable_reason` already marks such topics `aperiodic` and the audit already drops
+their rate-derived findings — the auditor now records that verdict in `unassessable`, and
+`find_gaps` makes the same call, reporting it in `excluded_note` rather than dropping
+silently. Naming the topic explicitly still returns its gaps, because then it was a
+deliberate question. The longest gap on that flight is now
+`/magnetometer_bias_estimate` at 100.02s — the real isolated failure.
+
+---
+
+## Tier 1.7 — The 12-flight corpus is not representative ⚠️ OPEN, and it moves the headline
+
+Re-running `real_data.py` after the Tier 1.6 fix produced the expected result on the
+corpus the published number was measured on — **precision 0.832 → 0.917, recall 1.000**,
+11 false positives removed, none of the 100 true dropouts lost. Three flights that had
+been reporting phantom stalls against zero labelled dropouts went to exactly zero.
+
+Then the same run over the **whole** corpus said something else. `~/data/public/px4` now
+holds 121 files — **105 distinct flights** after 16 duplicate uploads are removed, nearly
+9× the sample the published figure rests on. On those 105, with the fix in place:
+
+| Metric | 12 flights | 105 flights |
+|---|---|---|
+| Recall | 1.000 | **1.000** |
+| Precision | 0.917 | **0.381** |
+| Findings / labels | 108 / 100 | 391 / 152 |
+
+**Recall holds at 1.000 — the detector still finds every dropout the logger admitted to.
+Precision does not.** 239 of 391 findings match no label, and they concentrate on *short*
+flights that recorded no dropouts at all: `d4c32e25` (1432s, 0 labelled, 18 reported),
+`cbbf1568` (991s, 0, 17), `7b18658c` (249s, 0, 16), `a2fe7c84` (156s, 0, 12),
+`cb59d4eb` (103s, 0, 11). The Tier 1.6 fix addressed one shape of this — topics that had
+not started yet — and these are a different shape, on flights where every topic is
+present and simply idle.
+
+**Attributed.** Both arms were run over the same 105 flights, with the ULog duration fix
+below present in each so the only variable was the denominator floor (the "before" arm
+forces `expected_topics=0`, the detector's own unknown-source path, so no source edit was
+needed):
+
+| Arm | Findings | Recall | Precision | F1 |
+|---|---|---|---|---|
+| before (no floor) | 406 | 1.000 | 0.365 | 0.534 |
+| after (floor) | 391 | **1.000** | **0.381** | 0.552 |
+
+So the Tier 1.6 fix **helped and did not cost recall** — 15 fewer false positives — but it
+is a small correction to a much larger problem. The drop from 0.917 to 0.381 is a sampling
+effect, not a regression: the twelve were picked by `audit_corpus.py`'s interest ranking,
+so they were the flights with the most real events, and precision measured on them was
+never going to generalise. **The number was always ~0.38; we were only ever looking at the
+part of the corpus where it looked like 0.9.**
+
+**Separate bug, found by the same run — fixed.** Two flights (`491cef2e`, `d5b6ca1c`)
+reported a duration of **1,786,618,851s** — 56 years. The cause was the opposite of the
+obvious guess: not a few corrupt datasets, but 84 of 87 datasets carrying *absolute UTC*
+timestamps while three single-sample topics (`parameter_update`, `transponder_report`,
+`manual_control_setpoint`) carried a timestamp of **0**, which is PX4's *unset* marker
+rather than an observation at t=0. `min(starts)` took the zero, `max(ends)` took the
+epoch. `duration_s` is the denominator of `w_stall`, so those flights had a meaningless
+overall score, not just a wrong summary line.
+
+The reader now treats a ULog timestamp of 0 as unset — excluded from the time bounds and
+from the arrival stream, with a warning naming the count. The two flights read 214.5s and
+584.7s; **79 of 121 files carry at least one such sample**, so this was common and merely
+harmless in boot-relative logs. Zero flights in the corpus now report an implausible
+duration, and the corpus total went from "59554719 minutes" to 677.
+
+**Still open — the precision gap itself.** 239 of 391 findings match no label, concentrated
+on *short* flights with no recorded dropouts: `d4c32e25` (1432s, 0 labelled, 18 reported),
+`cbbf1568` (991s, 0, 17), `7b18658c` (249s, 0, 16), `cb59d4eb` (103s, 0, 11). Tier 1.6
+addressed topics that had not started yet; these are flights where every topic is present
+and simply idle, which is a different shape and needs its own investigation before it gets
+its own fix. Worth checking first: how many of these are *merged stalls* versus
+`subsystem_failure` findings, since the eval counts both and only the former is the claim
+the tool actually makes about the recorder.
+
+**Done when:** precision on the full corpus is defensible, or the README explains why a
+low-precision/perfect-recall detector is still the right trade for this job. The README now
+states 0.381 and says which half to trust; that is honest but it is not yet a fix.
+
+---
+
 ## Tier 2 — Launch
 
 ### 2.1 Model-in-the-loop evals ⭐ BUILT — needs an API key to produce numbers
@@ -210,11 +353,27 @@ Deliberate choices worth keeping:
 **Still open:** running it. That needs a key and real spend, so it is a human's call —
 then publish `evals/RESULTS.md` across several models.
 
-### 2.2 The README demo
+### 2.2 The README demo ✅ DONE
 
-30-second asciinema → GIF of an agent finding a real bug in a real bag. One sentence,
-then the GIF. Highest-leverage hour in the project, and it cannot be recorded before
-Tier 0.1 lands.
+`docs/assets/demo.gif` (35s, 264 KB), in the README under one sentence. `scripts/demo.py`
+drives `server.call_tool` — the same entrypoint an MCP client uses — against public PX4
+flight `588ff157`; `scripts/record_demo.sh` records and renders it (asciinema + agg, both
+user-space, no sudo). Re-recordable from scratch by anyone with the corpus.
+
+It shows the thing the project is *for*: a question about a magnetometer outage, an audit
+that answers `usable_with_caveats`, and 115 topics silent together for 6.31s — so the
+recorder stalled and the magnetometer is innocent. The timeline's aligned blank column
+across five unrelated topics is the whole argument in one frame.
+
+**It is a scripted tool sequence, not a model run.** Nothing in it decides what to call
+next and no prose is generated; the script says so in its docstring and the README says
+so underneath. The honest agent version is Tier 2.1 — and the better recording, once a
+key exists, is a real Claude Code session with baglens configured as an MCP server, since
+that shows a model choosing the second tool call rather than a script doing it.
+
+Two deliberate choices: the audit's real 19.5s cost is printed on screen even though
+`--idle-time-limit 2` compresses the silent wait in playback, and the timeline is filtered
+to five topics of 120 by name in `DEMO_ROWS` rather than by anything clever.
 
 ### 2.3 Ship it — **requires a human**
 
