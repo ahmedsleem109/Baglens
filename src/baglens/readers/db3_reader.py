@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import Arrival, BagMetadata, TopicInfo, dotted_get
+from .stamp_peek import peek_stamp_ns, stamp_offset
 
 
 class Db3Reader:
@@ -89,10 +90,11 @@ class Db3Reader:
         self, topics: list[str] | None = None, start_time_ns: int | None = None
     ) -> Iterator[Arrival]:
         db = self._db()
-        sql = (
-            "SELECT t.name, m.timestamp, LENGTH(m.data) FROM messages m "
-            "JOIN topics t ON t.id = m.topic_id"
-        )
+        stamps = getattr(self, "want_stamps", False)
+        # the blob is only pulled out of SQLite when someone asked for stamps; the
+        # payload-free path stays payload-free
+        cols = "t.name, m.timestamp, LENGTH(m.data)" + (", m.data" if stamps else "")
+        sql = f"SELECT {cols} FROM messages m JOIN topics t ON t.id = m.topic_id"
         params: list[Any] = []
         where: list[str] = []
         if topics:
@@ -105,8 +107,19 @@ class Db3Reader:
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY m.timestamp"
-        for name, ts, size in db.execute(sql, params):
-            yield Arrival(name, int(ts), int(ts), int(size or 0))
+        if not stamps:
+            for name, ts, size in db.execute(sql, params):
+                yield Arrival(name, int(ts), int(ts), int(size or 0))
+            return
+
+        offsets: dict[str, int | None] = {}
+        for name, ts, size, data in db.execute(sql, params):
+            off = offsets.get(name, False)
+            if off is False:
+                off = stamp_offset(self.schema_text(name))
+                offsets[name] = off
+            stamp = peek_stamp_ns(bytes(data), off) if off is not None and data else None
+            yield Arrival(name, int(ts), int(ts), int(size or 0), stamp)
 
     def messages(
         self,

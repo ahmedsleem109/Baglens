@@ -13,6 +13,7 @@ from ..budget import apply_budget, estimate_tokens, make_continuation
 from ..config import CONFIG
 from ..models import (
     ClockReport,
+    DataAgeReport,
     FileIntegrity,
     Finding,
     FindingDetail,
@@ -456,6 +457,28 @@ def register(mcp: Any) -> None:
         if auditor.clock is None:
             return ClockReport()
         return auditor.clock.report(Provenance(path=str(resolve(path)), method="clock_detector"))
+
+    @mcp.tool(name="health.data_age")
+    def data_age(path: str) -> DataAgeReport:
+        """How old the data behind each topic was — per stage, P50/P95/P99, in milliseconds.
+
+        Rate is the wrong question. A `/camera` publishing a steady 30 Hz says nothing
+        about whether the frame behind the last steering command was 80 ms or 300 ms old,
+        and that difference is what makes a robot overshoot. This follows `header.stamp`
+        — the *capture* time — through the pipeline and reports the true age at each hop.
+
+        The propagation graph in `stages[].upstream` is **inferred from stamp equality**,
+        not declared: a message carrying a stamp an earlier topic published is treated as
+        derived from it. `link_observations` is how much support that inference has.
+
+        Read `unmeasurable` before reading anything else. A topic listed there has no
+        usable capture time — no header in its schema, a stamp that is never set, or
+        stamps on a different clock — and is **absent from `stages` entirely** rather
+        than given an age derived from its arrival time. If `clock_suspect` is true, the
+        publishers disagree about what time it is and no age here can be trusted.
+        """
+        report, _ = audit(path, None, ["clock", "data_age"], CONFIG.sensitivity)
+        return report.data_age or DataAgeReport()
 
     @mcp.tool(name="health.topic_timeline")
     def topic_timeline(path: str, width: int = 100) -> Timeline:

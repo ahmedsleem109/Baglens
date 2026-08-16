@@ -14,6 +14,7 @@ from typing import Any
 from ..config import CONFIG, Config
 from ..models import (
     ClockReport,
+    DataAgeReport,
     FileIntegrity,
     Finding,
     HealthReport,
@@ -35,6 +36,7 @@ ALL_DETECTORS = (
     "clock",
     "correlation",
     "file_integrity",
+    "data_age",
 )
 
 
@@ -74,10 +76,15 @@ class Auditor:
         self.meta = reader.metadata()
         self.states: dict[str, TopicState] = {}
         self.t0: float | None = None
+        #: the same origin as ``t0``, kept in integer nanoseconds because a capture stamp
+        #: is absolute and subtracting a float second origin loses the resolution the
+        #: whole of F1 is measured in
+        self.t0_ns: int = 0
         self.t_end: float = 0.0
         self.n = 0
         self.clock: Any = None
         self.correlation: Any = None
+        self.data_age: Any = None
         self.integrity: FileIntegrity | None = None
         self.timeline = TimelineAccumulator()
         #: content-derived mission id, resolved on first report and then carried
@@ -127,6 +134,14 @@ class Auditor:
             self.correlation = CorrelationDetector(
                 self.cfg, expected_topics=self._expected_topic_count()
             )
+        if "data_age" in self.enabled and self.data_age is None:
+            from .age import DataAgeDetector
+
+            self.data_age = DataAgeDetector(self.cfg)
+            # the one place the audit stops being payload-free. Opt-in per reader, so a
+            # caller that did not ask for ages never pays for them.
+            if hasattr(self.reader, "want_stamps"):
+                self.reader.want_stamps = True
 
     #: `unassessable` **is** applied to D7 as of the W15 re-measurement, so the rule is
     #: now detector-wide: D2, the per-topic scores, `find_gaps` and D7 all refuse to draw
@@ -161,6 +176,7 @@ class Auditor:
         log_t_ns, pub_t_ns = arrival.log_time_ns, arrival.publish_time_ns
         if self.t0 is None:
             self.t0 = log_t_ns / 1e9
+            self.t0_ns = log_t_ns
         t = log_t_ns / 1e9 - self.t0
         pub_t = pub_t_ns / 1e9 - self.t0
         self.n += 1
@@ -180,6 +196,10 @@ class Auditor:
             self.clock.on_arrival(arrival.topic, t, pub_t)
         if self.correlation is not None:
             self.correlation.on_arrival(arrival.topic, t, dt, st.cadence.provisional_period)
+        if self.data_age is not None:
+            self.data_age.on_arrival(
+                arrival.topic, t, pub_t_ns, arrival.stamp_ns, self.t0_ns, st.msg_type
+            )
 
     def finish(self) -> HealthReport:
         """Close every detector and assemble the report. Safe to call on a restored
@@ -215,6 +235,7 @@ class Auditor:
         return {
             "version": 1,
             "t0": self.t0,
+            "t0_ns": self.t0_ns,
             "t_end": self.t_end,
             "n": self.n,
             "enabled": sorted(self.enabled),
@@ -223,6 +244,7 @@ class Auditor:
             "timeline": self.timeline.to_state(),
             "clock": self.clock.to_state() if self.clock is not None else None,
             "correlation": self.correlation.to_state() if self.correlation is not None else None,
+            "data_age": self.data_age.to_state() if self.data_age is not None else None,
             "topics": {
                 topic: {
                     "msg_type": st.msg_type,
@@ -250,6 +272,7 @@ class Auditor:
             topics=state["topic_filter"],
         )
         obj.t0 = state["t0"]
+        obj.t0_ns = int(state.get("t0_ns") or 0)
         obj.t_end = float(state["t_end"])
         obj.n = int(state["n"])
         obj._mission_id = state.get("mission_id")
@@ -266,6 +289,12 @@ class Auditor:
             # a hook, not state: it closes over this auditor and must be re-attached to
             # the restored one, or a resumed pass would judge topics the first pass would
             # have refused to judge
+        if state.get("data_age") is not None:
+            from .age import DataAgeDetector
+
+            obj.data_age = DataAgeDetector.from_state(state["data_age"], obj.cfg)
+            if hasattr(obj.reader, "want_stamps"):
+                obj.reader.want_stamps = True
 
         for topic, ts in state["topics"].items():
             cadence = TopicCadence.from_state(ts["cadence"], obj.cfg.cadence)
@@ -413,6 +442,21 @@ class Auditor:
         if self.correlation is not None:
             findings += self.correlation.finalize(self.t_end)
 
+        age_report: DataAgeReport | None = None
+        if self.data_age is not None:
+            # An age is a difference between two clocks' opinions of "now". If the clock
+            # detector found they disagree, every age here is that disagreement plus an
+            # unknown, so the detector withholds rather than publishes with a caveat.
+            if clock_report is not None:
+                c = self.cfg.clock
+                self.data_age.clock_suspect = bool(
+                    clock_report.backward_jumps
+                    or clock_report.steps
+                    or abs(clock_report.lag_growth_s) >= c.lag_growth_s
+                )
+            findings += self.data_age.finalize(self.t_end)
+            age_report = DataAgeReport(**self.data_age.report())
+
         if self.integrity is not None:
             findings += _integrity_findings(self.integrity, self.t_end, self.t0 or 0.0)
 
@@ -447,6 +491,7 @@ class Auditor:
             topics=topics,
             file_integrity=self.integrity,
             clock=clock_report,
+            data_age=age_report,
             assessability=assessability,
             caveats=build_caveats(findings, topics, self.integrity, assessability),
             provenance=prov,

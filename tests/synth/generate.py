@@ -89,6 +89,71 @@ SMALL_TOPICS: tuple[TopicSpec, ...] = (
 
 
 @dataclass
+class StageSpec:
+    """One stage of a stamp-propagating pipeline (F1).
+
+    ``delay_s`` is the mean delay from the *upstream* publish to this stage's publish.
+    For the first stage the upstream instant is the capture itself, so its delay is the
+    sensor's own capture→publish cost.
+    """
+
+    topic: str
+    msg_type: str
+    delay_s: float
+    delay_cv: float = 0.12
+    #: False for a message type carrying no ``header`` — the age chain cannot be measured
+    #: here, and the detector must report the stage unmeasurable rather than substitute
+    #: the arrival time, which would silently invent an age
+    stamped: bool = True
+    #: False for a node that restamps with "now" instead of forwarding the capture time.
+    #: That node has destroyed the trace, and saying so is itself a finding.
+    propagates_stamp: bool = True
+
+
+@dataclass
+class PipelineSpec:
+    """A chain of topics that pass one capture stamp along, stage by stage."""
+
+    hz: float
+    stages: tuple[StageSpec, ...]
+    jitter_cv: float = 0.02
+
+
+#: the worked example from NEWFEATURES F1: 12 ms capture→publish, 82 ms perception,
+#: 37 ms planning, 131 ms end to end
+DEFAULT_PIPELINE = PipelineSpec(
+    hz=30.0,
+    stages=(
+        StageSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 0.012),
+        StageSpec("/detections", "geometry_msgs/msg/PoseArray", 0.082),
+        StageSpec("/cmd_vel_stamped", "geometry_msgs/msg/TwistStamped", 0.037),
+    ),
+)
+
+#: the same chain, but the actuator publishes bare Twist. The last stage is unmeasurable
+#: and must be reported as such — this is the fixture that guards the rule.
+UNSTAMPED_PIPELINE = PipelineSpec(
+    hz=30.0,
+    stages=(
+        StageSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 0.012),
+        StageSpec("/detections", "geometry_msgs/msg/PoseArray", 0.082),
+        StageSpec("/cmd_vel", "geometry_msgs/msg/Twist", 0.037, stamped=False),
+    ),
+)
+
+#: a middle stage that restamps with "now", breaking the causal chain behind it
+RESTAMPING_PIPELINE = PipelineSpec(
+    hz=30.0,
+    stages=(
+        StageSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 0.012),
+        StageSpec("/detections", "geometry_msgs/msg/PoseArray", 0.082,
+                  propagates_stamp=False),
+        StageSpec("/cmd_vel_stamped", "geometry_msgs/msg/TwistStamped", 0.037),
+    ),
+)
+
+
+@dataclass
 class Fault:
     """One injected fault. ``kind`` names the generator; the rest is ground truth."""
 
@@ -142,6 +207,18 @@ def clock_step(t: float, step_ms: float, direction: str = "forward") -> Fault:
 def correlated_stall(topic_set: tuple[str, ...], t_start: float, duration: float) -> Fault:
     return Fault("correlated_stall", topics=tuple(topic_set), t_start=t_start,
                  t_end=t_start + duration, detector="correlation")
+
+
+def stale_pipeline(topic: str, from_ms: float, to_ms: float, t_start: float,
+                   ramp_duration: float) -> Fault:
+    """Grow one pipeline stage's delay over a window (F1).
+
+    The mean end-to-end age drifts, but the discriminating signal is the tail: P99 moves
+    first and moves further. ``topic`` names the stage whose delay grows.
+    """
+    return Fault("stale_pipeline", topic=topic, t_start=t_start,
+                 t_end=t_start + ramp_duration,
+                 params={"from_ms": from_ms, "to_ms": to_ms}, detector="data_age")
 
 
 def truncation(truncate_at_fraction: float) -> Fault:
@@ -255,6 +332,20 @@ def _apply_faults(
         ]
 
     # 5. publish → log time mapping: recorder lag (D6b) and clock steps (D6a/6c)
+    to_log = _log_time_fn(faults)
+
+    out: dict[str, list[tuple[float, float]]] = {}
+    for tp, times in sched.items():
+        out[tp] = [(t, to_log(t)) for t in times]
+    return out
+
+
+def _log_time_fn(faults: list[Fault]):
+    """publish time → log time, given recorder lag (D6b) and clock steps (D6a/6c).
+
+    Factored out because pipeline stages need the same mapping: a stage's publish time is
+    derived from its upstream, but the recorder's clock applies to it identically.
+    """
     lag_growth = 0.0
     lag_t0 = 0.0
     for f in faults:
@@ -267,18 +358,71 @@ def _apply_faults(
         if f.kind == "clock_step"
     ]
 
-    out: dict[str, list[tuple[float, float]]] = {}
-    for tp, times in sched.items():
-        pairs = []
-        for t in times:
-            log_t = t
-            if lag_growth and t > lag_t0:
-                log_t += lag_growth * (t - lag_t0)
-            for st, delta in steps:
-                if t >= st:
-                    log_t += delta
-            pairs.append((t, log_t))
-        out[tp] = pairs
+    def fn(t: float) -> float:
+        log_t = t
+        if lag_growth and t > lag_t0:
+            log_t += lag_growth * (t - lag_t0)
+        for st, delta in steps:
+            if t >= st:
+                log_t += delta
+        return log_t
+
+    return fn
+
+
+def _pipeline_messages(
+    pipelines: tuple[PipelineSpec, ...], duration: float, faults: list[Fault],
+    rng: random.Random,
+) -> list[tuple[float, float, str, float | None]]:
+    """Emit (log_t, pub_t, topic, stamp_t) for every stage of every pipeline.
+
+    One capture instant produces one message per stage, each published later than the
+    last and each carrying the *capture* stamp — which is exactly what makes the age
+    measurable downstream. ``stamp_t`` is None where the stage's type has no header.
+    """
+    ramps: dict[str, Any] = {}
+    for f in faults:
+        if f.kind == "stale_pipeline" and f.topic:
+            def make(a=f.params["from_ms"] / 1000.0, b=f.params["to_ms"] / 1000.0,
+                     t0=f.t_start, t1=f.t_end):
+                def fn(t: float) -> float:
+                    if t <= t0:
+                        return a
+                    if t >= t1:
+                        return b
+                    return a + (b - a) * (t - t0) / max(t1 - t0, 1e-9)
+
+                return fn
+
+            ramps[f.topic] = make()
+
+    to_log = _log_time_fn(faults)
+    out: list[tuple[float, float, str, float | None]] = []
+
+    for pipe in pipelines:
+        captures = _schedule(pipe.hz, duration, rng, pipe.jitter_cv)
+        for t_capture in captures:
+            prev_pub = t_capture
+            stamp = t_capture
+            for stage in pipe.stages:
+                mean = stage.delay_s
+                ramp = ramps.get(stage.topic)
+                if ramp is not None:
+                    mean = ramp(t_capture)
+                if stage.delay_cv > 0 and mean > 0:
+                    sigma = math.sqrt(math.log(1.0 + stage.delay_cv ** 2))
+                    d = mean * math.exp(rng.gauss(0.0, sigma) - sigma * sigma / 2)
+                else:
+                    d = mean
+                pub = prev_pub + d
+                if not stage.propagates_stamp:
+                    # the node restamps with "now": the trace back to capture is gone
+                    stamp = pub
+                out.append((to_log(pub), pub, stage.topic,
+                            stamp if stage.stamped else None))
+                prev_pub = pub
+
+    out.sort(key=lambda r: r[0])
     return out
 
 
@@ -318,11 +462,19 @@ def _header(t: float, frame: str) -> dict[str, Any]:
     return {"stamp": _stamp(t), "frame_id": frame}
 
 
-def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, Any]:
-    """A payload that is cheap to build but has real, analysable numeric structure."""
+def _payload(msg_type: str, t: float, i: int, rng: random.Random,
+             stamp_t: float | None = None) -> dict[str, Any]:
+    """A payload that is cheap to build but has real, analysable numeric structure.
+
+    ``t`` drives the *content*; ``stamp_t`` drives ``header.stamp``. They are the same
+    for an ordinary sensor topic, and they differ for a pipeline stage, which republishes
+    a derived result carrying the capture time of the data it came from. That difference
+    is the whole of F1: the gap between the stamp and the publish time is the data's age.
+    """
+    st = t if stamp_t is None else stamp_t
     if msg_type == "sensor_msgs/msg/Imu":
         return {
-            "header": _header(t, "imu_link"),
+            "header": _header(st, "imu_link"),
             "orientation": {"x": 0.0, "y": 0.0, "z": math.sin(t / 20), "w": math.cos(t / 20)},
             "orientation_covariance": [0.0] * 9,
             "angular_velocity": {"x": 0.0, "y": 0.0, "z": 0.1 * math.sin(t / 5) + rng.gauss(0, 0.01)},
@@ -336,7 +488,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
         }
     if msg_type == "nav_msgs/msg/Odometry":
         return {
-            "header": _header(t, "odom"),
+            "header": _header(st, "odom"),
             "child_frame_id": "base_link",
             "pose": {
                 "pose": {
@@ -361,7 +513,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
     if msg_type == "sensor_msgs/msg/LaserScan":
         n = 36
         return {
-            "header": _header(t, "laser"),
+            "header": _header(st, "laser"),
             "angle_min": -math.pi,
             "angle_max": math.pi,
             "angle_increment": 2 * math.pi / n,
@@ -373,7 +525,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
             "intensities": [],
         }
     if msg_type == "sensor_msgs/msg/CompressedImage":
-        return {"header": _header(t, "camera"), "format": "jpeg", "data": _tiny_jpeg()}
+        return {"header": _header(st, "camera"), "format": "jpeg", "data": _tiny_jpeg()}
     if msg_type == "sensor_msgs/msg/Image":
         w = h = 16
         # a moving bright band, so consecutive frames actually differ
@@ -382,7 +534,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
             (200 if row == band else 40) for row in range(h) for _ in range(w * 3)
         )
         return {
-            "header": _header(t, "camera"),
+            "header": _header(st, "camera"),
             "height": h,
             "width": w,
             "encoding": "rgb8",
@@ -405,7 +557,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
             for k in range(n_points)
         )
         return {
-            "header": _header(t, "lidar"),
+            "header": _header(st, "lidar"),
             "height": 1,
             "width": n_points,
             "fields": [
@@ -422,10 +574,10 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
     if msg_type == "nav_msgs/msg/Path":
         # a straight-line plan; /odom sines away from it, so deviation is measurable
         return {
-            "header": _header(t, "map"),
+            "header": _header(st, "map"),
             "poses": [
                 {
-                    "header": _header(t, "map"),
+                    "header": _header(st, "map"),
                     "pose": {
                         "position": {"x": 0.5 * (t + k), "y": 0.0, "z": 0.0},
                         "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
@@ -438,7 +590,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
         return {
             "transforms": [
                 {
-                    "header": _header(t, "odom"),
+                    "header": _header(st, "odom"),
                     "child_frame_id": "base_link",
                     "transform": {
                         "translation": {"x": 0.5 * t, "y": 2.0 * math.sin(t / 10), "z": 0.0},
@@ -447,10 +599,29 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
                 }
             ]
         }
+    if msg_type == "geometry_msgs/msg/TwistStamped":
+        return {
+            "header": _header(st, "base_link"),
+            "twist": {
+                "linear": {"x": 0.5 + 0.1 * math.sin(t / 7), "y": 0.0, "z": 0.0},
+                "angular": {"x": 0.0, "y": 0.0, "z": 0.2 * math.cos(t / 10)},
+            },
+        }
+    if msg_type == "geometry_msgs/msg/PoseArray":
+        return {
+            "header": _header(st, "camera"),
+            "poses": [
+                {
+                    "position": {"x": 2.0 + math.sin(t + k), "y": 0.3 * k, "z": 0.0},
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                }
+                for k in range((i % 3) + 1)
+            ],
+        }
     if msg_type == "rcl_interfaces/msg/Log":
         node, text = _LOG_LINES[i % len(_LOG_LINES)]
         return {
-            "stamp": _stamp(t),
+            "stamp": _stamp(st),
             "level": 20,
             "name": node,
             "msg": f"{text} (seq {i})",
@@ -460,7 +631,7 @@ def _payload(msg_type: str, t: float, i: int, rng: random.Random) -> dict[str, A
         }
     if msg_type == "diagnostic_msgs/msg/DiagnosticArray":
         return {
-            "header": _header(t, ""),
+            "header": _header(st, ""),
             # SimpleNamespace, not a dict: the CDR encoder resolves fields by attribute
             # first, and a field literally named "values" collides with dict.values
             "status": [
@@ -501,6 +672,7 @@ def generate_bag(
     topics: tuple[TopicSpec, ...] = SMALL_TOPICS,
     faults: list[Fault] | None = None,
     compression: bool = True,
+    pipelines: tuple[PipelineSpec, ...] = (),
 ) -> dict[str, Any]:
     """Write one MCAP with the given faults injected. Returns the ground truth dict."""
     path = Path(path)
@@ -508,7 +680,14 @@ def generate_bag(
     faults = list(faults or [])
     rng = random.Random(seed)
 
+    # a topic driven by a pipeline is published by the pipeline alone: leaving it in the
+    # plain schedule too would double its rate, which reads as a fault that was never
+    # injected
+    stage_topics = {st.topic for pipe in pipelines for st in pipe.stages}
+    topics = tuple(s for s in topics if s.topic not in stage_topics)
+
     schedules = _apply_faults(topics, duration_s, faults, rng)
+    pipeline_msgs = _pipeline_messages(pipelines, duration_s, faults, rng)
 
     encoders: dict[str, Any] = {}
     schema_ids: dict[str, int] = {}
@@ -524,7 +703,21 @@ def generate_bag(
         )
         writer.start(profile="ros2", library="baglens-synth")
 
-        for spec in topics:
+        # pipeline stages are channels too; a stage may reuse a topic already declared
+        # in `topics`, in which case the first declaration wins
+        stage_specs = tuple(
+            TopicSpec(st.topic, st.msg_type, pipe.hz, jitter_cv=pipe.jitter_cv)
+            for pipe in pipelines
+            for st in pipe.stages
+        )
+        declared: set[str] = set()
+        all_specs: list[TopicSpec] = []
+        for spec in (*topics, *stage_specs):
+            if spec.topic not in declared:
+                declared.add(spec.topic)
+                all_specs.append(spec)
+
+        for spec in all_specs:
             msgdef = MSGDEFS[spec.msg_type]
             if spec.msg_type not in schema_ids:
                 schema_ids[spec.msg_type] = writer.register_schema(
@@ -542,18 +735,25 @@ def generate_bag(
                 metadata=meta,
             )
 
-        type_of = {s.topic: s.msg_type for s in topics}
+        type_of = {s.topic: s.msg_type for s in all_specs}
         seqs: dict[str, int] = dict.fromkeys(type_of, 0)
 
-        merged: list[tuple[float, float, str]] = []
-        for tp, pairs in schedules.items():
-            merged.extend((log_t, pub_t, tp) for pub_t, log_t in pairs)
-        merged.sort()
+        # (log_t, pub_t, topic, stamp_t); stamp_t None means "stamp the publish time",
+        # which is what an ordinary sensor topic does
+        merged: list[tuple[float, float, str, float | None]] = [
+            (log_t, pub_t, tp, None)
+            for tp, pairs in schedules.items()
+            for pub_t, log_t in pairs
+        ]
+        merged.extend(pipeline_msgs)
+        merged.sort(key=lambda r: (r[0], r[2]))
 
-        for log_t, pub_t, tp in merged:
+        for log_t, pub_t, tp, stamp_t in merged:
             i = seqs[tp]
             seqs[tp] = i + 1
-            data = encoders[type_of[tp]](_payload(type_of[tp], pub_t, i, rng))
+            data = encoders[type_of[tp]](
+                _payload(type_of[tp], pub_t, i, rng, stamp_t=stamp_t)
+            )
             writer.add_message(
                 channel_id=channel_ids[tp],
                 log_time=BASE_EPOCH_NS + int(log_t * 1e9),
@@ -571,6 +771,27 @@ def generate_bag(
         "topics": [
             {"topic": s.topic, "msg_type": s.msg_type, "hz": s.hz, "count": len(schedules[s.topic])}
             for s in topics
+        ],
+        "pipelines": [
+            {
+                "hz": pipe.hz,
+                "stages": [
+                    {
+                        "topic": st.topic,
+                        "msg_type": st.msg_type,
+                        # ground truth for F1: the delay this stage adds, and the
+                        # cumulative age of the data it publishes
+                        "delay_ms": st.delay_s * 1000.0,
+                        "cumulative_age_ms": sum(
+                            s2.delay_s for s2 in pipe.stages[: k + 1]
+                        ) * 1000.0,
+                        "stamped": st.stamped,
+                        "propagates_stamp": st.propagates_stamp,
+                    }
+                    for k, st in enumerate(pipe.stages)
+                ],
+            }
+            for pipe in pipelines
         ],
         "faults": [asdict(f) for f in faults],
         "clean": not faults,

@@ -9,6 +9,54 @@ follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **End-to-end data age (F1)** — `src/baglens/detectors/age.py`, `health.data_age`.
+  Follows `header.stamp` to report how old the data behind each topic was: P50/P95/P99 per
+  topic, per stage where a chain exists, and a trend on the P99 tail. Single-pass,
+  **1,040 B of state per topic**, checkpointable like every other detector.
+  Precision/recall **1.000 / 1.000 synthetic, 0.900 / 0.750 on faults injected into real
+  recordings** (`evals/age/data_age.py` → `evals/age/DATA_AGE.md`). Every fault at 2× the
+  target topic's own noise band or above was caught, 9 of 9; the three misses are all at
+  1×, where the fault is the same size as the variance it hides in.
+- **Payload reading without deserialization** — `src/baglens/readers/stamp_peek.py`.
+  `header.stamp` is read as an 8-byte `struct.unpack` at CDR offset 4, gated on the
+  *schema* rather than on the bytes, so a `std_msgs/Float32` is never mistaken for a
+  stamped message. Verified against a full decode on **134 topics across 11 real ROS 2
+  recordings, zero disagreements** (`scripts/verify_stamp_peek.py`, exits non-zero on any
+  disagreement). Available identically on the live ROS 2 path, which already subscribes
+  raw.
+- **`P2Quantile`** in `detectors/base.py` — streaming quantiles from five markers, within
+  0.3% of the true P95 on 20k samples. Chosen over a log histogram because 256 bins would
+  cost 2,048 B per topic, the entire per-topic budget, for one estimator.
+- **Stale-pipeline injection into real recordings** — `tests/synth/inject.py` can now age
+  one topic's stamps by a growing amount, editing eight bytes per message and leaving
+  arrival times, sizes and topic mix untouched.
+
+### Changed
+
+- **The audit is no longer strictly payload-free when `data_age` is enabled** (it is, by
+  default). Measured with `scripts/bench_stamp_peek.py` on a 200k-message recording: the
+  peek costs **+10.6%** on an arrival scan, and the full detector **+58.6%** on an audit.
+  Disable with `--detectors …` omitting `data_age` to get the old numbers back. ULog is
+  unaffected — its reader offers no stamps.
+
+### Notes
+
+- **Negative result: real robots mostly do not propagate `header.stamp` through a
+  pipeline.** Measured across all 11 public ROS 2 recordings, 1–21% of stamps are shared
+  between topics, but almost all of that is sensor synchronisation (stereo pairs,
+  hardware-synced lidar) or driver-internal derivation. Exactly one genuine cross-node
+  edge exists in the corpus, and **no recording contains a perception → planning →
+  actuation chain** — a full Nav2 shuttle bus restamps before `/cmd_vel`. The per-stage
+  feature is therefore verified but corpus-limited; on such a robot F1 reports per-topic
+  age and names the node that broke the trace.
+- **A P99 from four samples is not a statistic.** An early version produced 16 false
+  "data age is growing" findings on `nuway_stops`, the parked shuttle bus, including a
+  claimed 57× rise on a 0.4 Hz topic. Buckets now require 100 age samples; sparse topics
+  report `trend_assessable: false` rather than a verdict. This is W15's rule applied to a
+  new detector, and it took the false positives from 16 to 3 without moving a threshold.
+
 ## [0.3.0] — 2026-08-16
 
 ### Added

@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from .readers.base import Arrival, BagMetadata, TopicInfo
+from .readers.stamp_peek import peek_stamp_ns, stamp_offset_for_type
 
 #: how often to re-scan the graph for topics that appeared after startup
 DISCOVERY_INTERVAL_S = 2.0
@@ -122,8 +123,13 @@ class Ros2Feed:
         queue_size: int = QUEUE_SIZE,
         idle_timeout_s: float = 0.0,
         discovery_interval_s: float = DISCOVERY_INTERVAL_S,
+        want_stamps: bool = True,
     ) -> None:
         self.topic_filter = topics
+        #: peek `header.stamp` off each raw buffer, so the live path can measure data age
+        #: exactly as the offline one does. On by default: a live monitor that cannot
+        #: answer "how old is this data?" is the one place the question is urgent.
+        self.want_stamps = want_stamps
         self.node_name = node_name
         self.idle_timeout_s = idle_timeout_s
         self.discovery_interval_s = discovery_interval_s
@@ -234,22 +240,27 @@ class Ros2Feed:
                 msg_type = get_message(type_name)
             except Exception:  # a type this machine has no definition for
                 continue
+            offset = stamp_offset_for_type(msg_type) if self.want_stamps else None
             self._node.create_subscription(
-                msg_type, topic, self._make_callback(topic), qos, raw=True
+                msg_type, topic, self._make_callback(topic, offset), qos, raw=True
             )
             self._subscribed.add(topic)
             added += 1
         return added
 
-    def _make_callback(self, topic: str) -> Any:
+    def _make_callback(self, topic: str, stamp_at: int | None = None) -> Any:
         clock = self._node.get_clock()
 
         def on_message(raw: bytes) -> None:
             # Raw subscription: `raw` is the serialised buffer, so this costs a length
-            # check rather than a deserialisation, and the payload is never inspected.
+            # check rather than a deserialisation. `stamp_at` is set only for topics whose
+            # type declares a leading header and only when stamps were asked for, and it
+            # buys one 8-byte peek — the same one the file path takes, deliberately from
+            # the same module, so live and offline cannot drift apart on the same bytes.
             now = clock.now().nanoseconds
+            stamp = peek_stamp_ns(raw, stamp_at) if stamp_at is not None else None
             try:
-                self._q.put_nowait(Arrival(topic, now, now, len(raw)))
+                self._q.put_nowait(Arrival(topic, now, now, len(raw), stamp))
             except queue.Full:
                 self.dropped += 1
 

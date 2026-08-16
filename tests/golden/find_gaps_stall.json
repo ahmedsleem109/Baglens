@@ -72,7 +72,7 @@
   ],
   "offset": 0,
   "provenance": {
-    "method": "single_pass_auditor(cadence,clock,correlation,dropped,file_integrity,gap,jitter,rate_degradation)",
+    "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation)",
     "mission_id": "<volatile>",
     "partial": false,
     "path": "<volatile>",

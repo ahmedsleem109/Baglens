@@ -76,6 +76,45 @@ That comparison is the point. A refusal only means something if the same tool co
 grades the recording next to it. **A short list of findings is not proof that a recording
 is healthy — it can just as easily mean nothing was measurable.**
 
+## How old was the data behind that command?
+
+Rate is the wrong question. `/camera` publishing a steady 30 Hz tells you nothing about
+whether the frame behind the last steering command was 80 ms old or 300 ms old — and that
+difference is the one that makes a robot overshoot.
+
+ROS messages carry the time the data was *captured*, and nodes pass that stamp along as
+they derive results from it. `baglens` follows it and reports the age per stage:
+
+```
+/camera/image_raw    P50   12 ms   P95   14 ms   P99   16 ms
+/detections          P50   94 ms   P95  112 ms   P99  121 ms   (+82 ms, from /camera)
+/cmd_vel_stamped     P50  131 ms   P95  150 ms   P99  159 ms   (+37 ms, from /detections)
+```
+
+Nothing declares that chain — it is inferred from stamp equality.
+
+**A caveat measured rather than assumed:** across 11 real public recordings, that chain
+mostly does *not* survive to the actuator. What real robots share stamps for is sensor
+synchronisation — stereo pairs, hardware-synced lidar — and driver-internal steps. Even a
+full Nav2 shuttle bus restamps before `/cmd_vel`. So on most recordings this reports
+per-topic age plus **which node broke the trace**, and the end-to-end chain above needs a
+stack that propagates stamps. [The numbers](docs/how-it-works.md#what-stamp-propagation-actually-looks-like-on-real-robots).
+
+When a stage cannot be measured, it is **named**, never filled in with the arrival time:
+
+```
+/cmd_vel             unmeasurable — geometry_msgs/msg/Twist carries no header.stamp
+```
+
+That refusal is the whole point. A `geometry_msgs/Twist` has no stamp, so the chain breaks
+exactly at the actuator — which is where you most want it — and the honest answer is to
+say so. The same applies to a node that restamps with its own clock, to a topic stamped
+from a monotonic clock, and to a recording whose publishers disagree about the time: each
+is reported as what it is rather than converted into a plausible-looking number.
+
+Reading the stamp costs an 8-byte peek, not a decode — verified against a full decode on
+134 topics across 11 real recordings, zero disagreements.
+
 ## The training-data gate
 
 ```bash
@@ -105,6 +144,8 @@ convert.
   jitter, dropped messages, clock lag, clock steps, cross-topic correlation, file
   integrity. Nothing buffers the file, so a 50 GB recording audits without being loaded
   and the same code runs against a live subscription.
+- **End-to-end data age**, per stage, over a propagation graph inferred from stamp
+  equality rather than declared — with every stage it cannot measure named as such.
 - **43 MCP tools** across 10 namespaces — audit, inspect, timeseries, catalog, compare,
   logs, spatial, frames, export. Every result is typed, carries provenance, and respects
   a token budget.

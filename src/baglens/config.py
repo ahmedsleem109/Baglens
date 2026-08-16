@@ -128,6 +128,57 @@ class ClockConfig:
 
 
 @dataclass(frozen=True)
+class DataAgeConfig:
+    """F1 — end-to-end data age."""
+
+    #: how many recent capture stamps to remember while inferring the propagation graph.
+    #: Only messages still in flight can match, so this is generous; exceeding it is
+    #: reported as truncation rather than silently losing links.
+    stamp_table_size: int = 4096
+    #: how long after a capture a downstream stage may still publish it. Evicting a stamp
+    #: older than this loses nothing — no real pipeline stage was going to claim it — so
+    #: only younger evictions are counted as truncation.
+    link_horizon_s: float = 5.0
+    #: a candidate upstream needs this many stamp matches before the edge is believed
+    min_link_observations: int = 20
+    #: and this fraction of the downstream topic's messages, so an occasional coincidence
+    #: between unrelated topics does not become a pipeline stage
+    min_link_fraction: float = 0.5
+    #: at most this many candidate upstreams tracked per topic
+    max_candidates_per_topic: int = 8
+
+    #: trend on the age tail, in the same shape as D3: per-bucket P99, Theil-Sen slope
+    bucket_s: float = 10.0
+    n_buckets: int = 30
+    min_buckets: int = 6
+    #: growth in P99 age across the window that constitutes a finding, as a fraction of
+    #: the earliest bucket's P99
+    rel_growth_by_sensitivity: dict[str, float] = field(
+        default_factory=lambda: {"low": 1.00, "normal": 0.50, "high": 0.25}
+    )
+    tau_p_max: float = 0.05
+    #: A bucket needs this many age samples before its P99 is a statistic rather than a
+    #: maximum. Measured, not guessed: without it, `nuway_stops` — the parked shuttle bus
+    #: whose topics are event-driven — produced 16 false "data age is growing" findings,
+    #: several from buckets holding four messages. At the 10 s default bucket this admits
+    #: topics publishing above ~10 Hz, which is where latency matters anyway; slower
+    #: topics are reported as unassessable for trend rather than judged.
+    min_samples_per_bucket: int = 100
+    #: ages below this are not worth trending; a 0.4 ms stage doubling is not a finding
+    min_age_s: float = 0.002
+    #: fraction of a topic's messages showing a stamp defect before it is reported
+    restamp_fraction: float = 0.9
+    #: An age larger than this is not an age — it is two different time bases being
+    #: subtracted. `/bond` on a real shuttle-bus recording stamps from a steady clock that
+    #: starts near zero, which reads as data 54 years old; reporting that next to a
+    #: 48 ms lidar age would discredit both. Such topics are named unmeasurable instead.
+    max_plausible_age_s: float = 60.0
+    #: a stamp origin whose data is younger than this is stamping with its own publish
+    #: time rather than a capture time. A real sensor never manages zero.
+    restamp_max_age_s: float = 0.001
+
+
+@dataclass(frozen=True)
 class CorrelationConfig:
     """D7 — cross-topic gap correlation."""
 
@@ -241,6 +292,7 @@ class Config:
     jitter: JitterConfig = field(default_factory=JitterConfig)
     clock: ClockConfig = field(default_factory=ClockConfig)
     correlation: CorrelationConfig = field(default_factory=CorrelationConfig)
+    data_age: DataAgeConfig = field(default_factory=DataAgeConfig)
     assessability: AssessabilityConfig = field(default_factory=AssessabilityConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)

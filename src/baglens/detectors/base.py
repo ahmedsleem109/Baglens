@@ -216,6 +216,108 @@ class LogHistogram:
         return obj
 
 
+class P2Quantile:
+    """Streaming quantile estimate (Jain & Chlamtac 1985). State: five floats, five ints.
+
+    Chosen over a log histogram for data age because accuracy per byte is what matters
+    here: a 128-bin histogram spanning six decades has 11 %-wide bins, which is not good
+    enough to publish a P95 in milliseconds. Five markers are, and they cost less.
+
+    The estimate is of the *whole stream seen so far*. Trend work must therefore use one
+    of these per window rather than reading a slope off a single lifelong estimator,
+    which by construction converges instead of moving.
+    """
+
+    __slots__ = ("p", "_q", "_n", "_np", "_dn", "count")
+
+    def __init__(self, p: float) -> None:
+        self.p = p
+        self._q: list[float] = []
+        self._n = [0, 1, 2, 3, 4]
+        self._np = [0.0, 2.0 * p, 4.0 * p, 2.0 + 2.0 * p, 4.0]
+        self._dn = [0.0, p / 2.0, p, (1.0 + p) / 2.0, 1.0]
+        self.count = 0
+
+    def push(self, x: float) -> None:
+        self.count += 1
+        q = self._q
+        if len(q) < 5:
+            q.append(x)
+            if len(q) == 5:
+                q.sort()
+            return
+
+        n, npos, dn = self._n, self._np, self._dn
+        if x < q[0]:
+            q[0] = x
+            k = 0
+        elif x >= q[4]:
+            q[4] = x
+            k = 3
+        elif x < q[1]:
+            k = 0
+        elif x < q[2]:
+            k = 1
+        elif x < q[3]:
+            k = 2
+        else:
+            k = 3
+
+        # Unrolled on purpose: this runs three to six times per message on the audit's
+        # hot path, and the profile put the loop overhead above everything else in the
+        # detector. The marker count is fixed at five by the algorithm, so there is no
+        # generality being given up.
+        for i in range(k + 1, 5):
+            n[i] += 1
+        npos[0] += dn[0]
+        npos[1] += dn[1]
+        npos[2] += dn[2]
+        npos[3] += dn[3]
+        npos[4] += dn[4]
+
+        for i in (1, 2, 3):
+            d = npos[i] - n[i]
+            if (d >= 1 and n[i + 1] - n[i] > 1) or (d <= -1 and n[i - 1] - n[i] < -1):
+                s = 1 if d > 0 else -1
+                # parabolic prediction, with a linear fallback when it would step outside
+                # the neighbouring markers and destroy the ordering the whole thing rests on
+                qn = q[i] + s / (n[i + 1] - n[i - 1]) * (
+                    (n[i] - n[i - 1] + s) * (q[i + 1] - q[i]) / (n[i + 1] - n[i])
+                    + (n[i + 1] - n[i] - s) * (q[i] - q[i - 1]) / (n[i] - n[i - 1])
+                )
+                if q[i - 1] < qn < q[i + 1]:
+                    q[i] = qn
+                else:
+                    q[i] = q[i] + s * (q[i + s] - q[i]) / (n[i + s] - n[i])
+                n[i] += s
+
+    @property
+    def value(self) -> float:
+        """Best estimate available. Under five samples this is the exact order statistic,
+        which matters because short topics are common and a wrong number is worse than a
+        coarse one."""
+        q = self._q
+        if not q:
+            return 0.0
+        if len(q) < 5:
+            s = sorted(q)
+            return s[min(len(s) - 1, int(self.p * len(s)))]
+        return q[2]
+
+    def to_state(self) -> dict[str, Any]:
+        return {"p": self.p, "q": list(self._q), "n": list(self._n),
+                "np": list(self._np), "count": self.count}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> P2Quantile:
+        obj = cls(float(state["p"]))
+        obj._q = [float(v) for v in state["q"]]
+        obj._n = [int(v) for v in state["n"]]
+        obj._np = [float(v) for v in state["np"]]
+        obj.count = int(state["count"])
+        return obj
+
+
 def theil_sen(xs: list[float], ys: list[float]) -> float:
     """Median of pairwise slopes. Robust to the single huge gap that wrecks OLS.
 
