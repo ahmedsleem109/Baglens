@@ -23,7 +23,10 @@ magnetometer — 105 topics went silent together, so the recorder stalled:
 Every figure in that recording is real and reproducible: `scripts/demo.py` drives the
 same `call_tool` entrypoint an MCP client uses, against
 [flight `588ff157`](https://review.px4.io) from review.px4.io. The audit genuinely takes
-~20s on 845k messages; only the silent wait is compressed in playback.
+~20s on 845k messages; only the silent wait is compressed in playback. The other two
+demos — [refusing to grade an unmeasurable recording](#it-refuses) and
+[gating a training set](#the-training-data-gate) — are further down, and are recorded the
+same way.
 
 The shape of a full report:
 
@@ -238,13 +241,14 @@ the false alarm was necessary and, on its own, made it worse: the same file then
 *trustworthy at 98.7*, because a recording nothing can be measured in produces few
 findings, and few findings look exactly like a clean recording.
 
-```
-verdict: unassessable   (confidence 0.00)
-  only 0 of 70 topics have a measurable publication rate (0%, floor 25%) — the rest
-    are event-driven or too sparse, so most of this recording was never checked
-  assessable topics published during 0% of the recording (floor 50%) — the rest is
-    silence that cannot be distinguished from a robot that was simply idle
-```
+Both recordings below are the same shuttle bus, audited by the same tool in the same run —
+one driving a route, one parked. It grades the first and declines to grade the second:
+
+![baglens refusing to grade a recording it cannot measure](docs/assets/demo-refuse.gif)
+
+That comparison is the whole point. A refusal only means something if the same tool
+confidently grades the recording next to it; a tool that refuses everything is not
+cautious, it is useless.
 
 Anyone can emit findings. What is worth owning is a tool that is never confidently wrong.
 
@@ -353,13 +357,13 @@ So the output is not a score. It is a manifest: accept / review / reject per epi
 reason code and a human reason for every rejection, and a `train_on` list a training job
 reads directly.
 
-```
-412 episodes under ~/data/episodes
-  accept 388   review 5   reject 19
-  rejections:   11 message_loss · 5 recorder_stall · 2 clock_non_monotonic · 1 unassessable
-```
+![baglens gating a dataset of episodes](docs/assets/demo-gate.gif)
 
-"3.2% of this episode fell inside a recorder stall" is actionable. "Score 61" is not.
+"`/sbg/ekf_nav` was silent for 15.01s in one stretch" is actionable. "Score 61" is not.
+
+That run is 14 episodes: nine real recordings left alone, and five copies with a known
+fault injected — so the rejections above are verifiable rather than merely plausible.
+Reproduce it with `scripts/demo_gate.py`.
 
 **Scope, stated rather than implied.** This reads recordings with real timestamps. It does
 **not** audit LeRobot-format datasets: those recompute per-frame timestamps as
