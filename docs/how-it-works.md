@@ -4,6 +4,7 @@ The detail the README deliberately leaves out. Read it when you want to argue wi
 number rather than accept one.
 
 - [The eight detectors](#the-eight-detectors)
+- [Data age](#data-age-how-old-was-the-data-behind-that-command)
 - [The health score, in the open](#the-health-score-in-the-open)
 - [When it refuses to answer](#when-it-refuses-to-answer)
 - [The streaming constraint](#the-streaming-constraint)
@@ -77,6 +78,132 @@ Two terms exist because of what real flights did to the first version of this fo
 
 Every constant lives in `config.py` and is overridable.
 
+## Data age: how old was the data behind that command?
+
+The eight detectors above all answer *"can this recording be trusted?"*. This one answers
+a different question, and it is the one teams actually ask: **how old was the camera frame
+that produced this steering command?** A pipeline that drifts from 80 ms to 300 ms makes a
+robot quietly worse, the behaviour looks like a tuning problem, and nothing existing will
+tell you which stage grew.
+
+`header.stamp` is the *capture* time, and nodes propagate it as they pass derived results
+along. Following it gives the true age of the data behind every topic, per stage:
+
+```
+/camera/image_raw   stamp=t          published t+12ms   →  capture→publish  12 ms
+/detections         stamp=t          published t+94ms   →  perception       82 ms
+/cmd_vel_stamped    (from stamp t)   published t+131ms  →  planning         37 ms
+                                                           end-to-end      131 ms
+```
+
+**The propagation graph is inferred, not declared.** Nothing tells you that `/detections`
+derives from `/camera`. Stamp equality does: a `/detections` message carrying a stamp an
+earlier `/camera` message published is a causal link, and coincidences are rare enough
+that the edge only has to clear a support threshold to be believed.
+
+**But read the next section before believing the diagram above applies to your robot.**
+
+### What stamp propagation actually looks like on real robots
+
+The worked example above is what F1 was designed for. It is *not* what the public corpus
+contains, and that is worth stating before anyone plans around it. Measured across all 11
+real ROS 2 recordings — 1% to 21% of stamps are carried by more than one topic:
+
+| Recording | Shared | What is actually sharing |
+|---|---:|---|
+| dongkkka ×6 | 10.3% | `/zed/left` + `/zed/right` |
+| fastlivo | 4.6% | `/left_camera` + `/right_camera` + `/livox/lidar` |
+| nuway_stops | 10.3% | `/lidar_safety/*/cloud` + `/sick_lms_1xx/scan` |
+| nuway_waypoints | 21.4% | `/imu/data` + `/odometry/global` |
+| tesla3_av | 1.0% | `/scan` + `/velodyne_packets` + `/velodyne_points` |
+
+Almost all of it is **sensor synchronisation, not a processing pipeline** — stereo pairs
+and hardware-synced sensors publishing one capture instant. The delay between `/zed/left`
+and `/zed/right` is ~0 and is not a latency hop. The remainder is driver-internal
+derivation (`velodyne_packets → points → scan`). Exactly one edge in the corpus is a
+genuine cross-node derivation: `/imu/data → /odometry/global`.
+
+**No recording contains a perception → planning → actuation chain.** `nuway_stops` is a
+full Nav2 shuttle bus — 110 topics, costmaps, `/cmd_vel` — and its deepest stamp chain
+still stops at the lidar driver. So on this corpus the question *"how old was the camera
+frame behind this steering command?"* is **unanswerable**, because real stacks restamp
+before the command is published.
+
+Two consequences, both deliberate:
+
+1. The per-stage chain is real machinery and is verified against fixtures that propagate
+   stamps end to end — but on a robot that restamps, it degrades to per-topic age. Do not
+   plan a latency budget around it without checking your own stack first.
+2. The restamp finding stops being a footnote and becomes the point: it **names the node
+   that broke the trace**, which is the precondition for anyone measuring latency at all.
+
+The fixtures propagate stamps because they were written from the design sketch rather
+than from the corpus. That is the "validated against your own assumptions" trap, and it
+is recorded here because it was walked into during F1 and only caught by measurement.
+
+**The distribution, not the mean.** P50/P95/P99 per stage, plus a Theil-Sen trend over
+bucketed P99s. The tail moves first — a P99 that doubles across a mission is a finding
+while the mean is still flat.
+
+### Reading a payload without decoding one
+
+The audit is payload-free, which is why it is fast. Data age is the first thing that needs
+a field out of the message, so it buys exactly one and nothing else. In ROS 2 CDR a
+message whose first field is a `std_msgs/Header` puts `sec` and `nanosec` immediately
+after the 4-byte encapsulation header, so reading a stamp is an 8-byte `struct.unpack`
+rather than a deserialization.
+
+That is a claim, so it is checked rather than assumed:
+`scripts/verify_stamp_peek.py` decodes every message properly and compares. **134 topics
+across 11 real ROS 2 recordings, zero disagreements.** Re-run it before trusting the peek
+on a new corpus; it exits non-zero if any topic disagrees.
+
+**The gate is the schema, never the bytes.** `std_msgs/Float32` has no header, and its
+first eight bytes unpack perfectly happily into a plausible-looking stamp. The decision is
+made once per schema from the message definition; a schema whose first field is not a
+Header (or a bare `Time`) is never peeked at all, and its topic is reported unmeasurable.
+
+### The four things it refuses to call an age
+
+Each of these was cheaper to report honestly than to paper over, and three of the four
+were found on real recordings rather than imagined:
+
+| Situation | What a naive version does | What this does |
+|---|---|---|
+| No `header` in the schema (`geometry_msgs/Twist`) | substitutes arrival time | names the topic **unmeasurable** |
+| `header.stamp` present but never set | reports data 55 years old | reports *"has a stamp but never sets it"* |
+| Stamps from a steady clock, not the epoch (`/bond`) | reports data 54 years old | reports *"on a different clock"*, excludes it |
+| Publisher clocks disagree | reports skew as though it were latency | withholds every age and says why |
+
+The third is the one worth dwelling on. On a real shuttle-bus recording `/bond` stamps
+from a monotonic clock that starts near zero; differenced against a wall-clock publish
+time, that is an age of 1,725,326,040 seconds. One such row averaged into a report makes
+every honest number next to it look arbitrary — so an implied age beyond a plausible bound
+is treated as evidence of two clocks, not of old data.
+
+### Measured
+
+| | Precision | Recall |
+|---|---:|---:|
+| Synthetic pipelines | 1.000 | 1.000 |
+| **Injected into real recordings** | **0.900** | **0.750** |
+
+Read the real row with its case table, not on its own. Every fault at 2×, 4× and 8× the
+target topic's own noise band was caught, on all three recordings — 9 of 9. Every fault at
+1× — exactly the size of the variance it hides in — was missed, 0 of 3, and those three
+misses are the whole of the recall shortfall. A detector that fired there would be
+reporting the recording's own jitter as a fault.
+
+One rule earned along the way: **a bucket needs 100 age samples before its P99 is a
+statistic rather than a maximum.** Without that floor, `nuway_stops` — the parked shuttle
+bus whose topics are event-driven — produced 16 false "data age is growing" findings, one
+claiming a 57× rise on a topic publishing at 0.4 Hz. Sparse topics now get their age
+reported and their *trend* refused, flagged as `trend_assessable: false` so that a skipped
+check cannot read as a passed one. That is W15's lesson applied to a new detector.
+
+Details in [`DATA_AGE.md`](../evals/age/DATA_AGE.md); regenerate with
+`uv run python -m evals.age.data_age`.
+
 ## When it refuses to answer
 
 `unassessable` overrides the score entirely. It is not a worse grade than `compromised`;
@@ -144,8 +271,38 @@ Two caveats a reader should have rather than a round number:
   not serialisation, that dominates. Measure your own cadence with
   `scripts/bench_snapshot.py`.
 
-MB/s is dominated by *message count*, not bytes: the audit never parses payloads, so a bag
-full of camera frames audits far faster per megabyte than tiny synthetic messages do.
+MB/s is dominated by *message count*, not bytes: the audit does not parse payloads, so a
+bag full of camera frames audits far faster per megabyte than tiny synthetic messages do.
+
+### What data age costs
+
+"Never parses payloads" stopped being exactly true when data age landed, so here is the
+measurement rather than a reassurance. On `nuway_waypoints.mcap` (200,144 messages),
+best of two, via `scripts/bench_stamp_peek.py`:
+
+| | msg/s | vs payload-free |
+|---|---:|---:|
+| Arrival scan, payload-free | 67,019 | — |
+| Arrival scan, with the stamp peek | 60,574 | +10.6% time |
+| Full audit, without `data_age` | 21,694 | — |
+| Full audit, with `data_age` | 13,678 | +58.6% time |
+
+The peek itself is cheap, as designed — 10.6% for an 8-byte `unpack` on every headered
+message. The rest is the detector: four streaming quantile estimators per message, in
+Python. **That is a real cost and it is on by default**, on the argument that a feature
+nobody switches on is a feature nobody has. Turn it off with
+`--detectors cadence,gap,rate_degradation,jitter,dropped,clock,correlation,file_integrity`,
+and the numbers above are what you get back.
+
+The obvious optimisation was tried on paper and rejected: replacing the three streaming
+quantile estimators with one fixed-bin log histogram would be much cheaper per message,
+but 256 bins cost 2,048 B per topic — the entire per-topic state budget, spent on one
+estimator. The P² markers cost ten numbers and land the whole detector at **1,040 B per
+topic**. Runtime was the cheaper thing to give up.
+
+Two things that do *not* pay this cost: ULog, whose reader never offers stamps, so the
+PX4 column above is unchanged; and any topic whose schema has no header, which is skipped
+before a byte is read.
 
 ## The measurements that went the wrong way
 

@@ -169,6 +169,45 @@ class Timeline(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
 
 
+class AgeStage(BaseModel):
+    """One stage of an inferred pipeline, and the age of the data it publishes."""
+
+    topic: str
+    #: the topic this one's stamps came from, inferred from stamp equality — never
+    #: declared, so `link_observations` is how much support the inference has
+    upstream: str | None = None
+    link_observations: int = 0
+    messages: int = 0
+    #: fraction of this topic's messages carrying a stamp no upstream topic had published.
+    #: 1.0 marks a chain root — either a genuine sensor or a node that restamped.
+    origin_fraction: float = 0.0
+    #: False when the topic is too sparse for a per-bucket P99 to be a statistic. Its
+    #: ages below are still real; its *trend* was refused rather than guessed.
+    trend_assessable: bool = False
+    #: age of the data behind this topic's messages, measured from capture
+    age_p50_ms: float = 0.0
+    age_p95_ms: float = 0.0
+    age_p99_ms: float = 0.0
+    #: the delay this stage itself adds, measured from its upstream's publish
+    stage_p50_ms: float | None = None
+    stage_p95_ms: float | None = None
+    stage_p99_ms: float | None = None
+
+
+class DataAgeReport(BaseModel):
+    """F1 — how old the data behind each topic was, per stage and end to end."""
+
+    stages: list[AgeStage] = Field(default_factory=list)
+    #: topics nothing downstream derives from: the ends of the chains
+    endpoints: list[str] = Field(default_factory=list)
+    #: topic -> why its age could not be measured. A stage that cannot be measured is
+    #: named here rather than being given an age computed from its arrival time.
+    unmeasurable: dict[str, str] = Field(default_factory=dict)
+    #: ages across unsynchronised clocks are meaningless; when True nothing is reported
+    clock_suspect: bool = False
+    stamp_table_evictions: int = 0
+
+
 class HealthReport(Budgeted):
     mission_id: str
     path: str = ""
@@ -185,6 +224,7 @@ class HealthReport(Budgeted):
     topics: list[TopicHealth] = Field(default_factory=list)
     file_integrity: FileIntegrity | None = None
     clock: ClockReport | None = None
+    data_age: DataAgeReport | None = None
     #: what an analyst must NOT conclude from this data
     caveats: list[str] = Field(default_factory=list)
     provenance: Provenance = Field(default_factory=Provenance)

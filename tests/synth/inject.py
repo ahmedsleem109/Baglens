@@ -39,6 +39,7 @@ from mcap.reader import make_reader
 from mcap.writer import CompressionType, Writer
 
 from baglens.config import CONFIG
+from baglens.readers.stamp_peek import peek_stamp_ns, stamp_offset, write_stamp_ns
 
 from .generate import (
     Fault,
@@ -276,6 +277,33 @@ def _shifts(faults: list[Fault]) -> list[tuple[int, Shift]]:
     return out
 
 
+def _stamp_ramps(faults: list[Fault]) -> list[tuple[int, Callable[[str, float], float]]]:
+    """[(fault index, extra age in seconds)] for stale-pipeline faults (F1).
+
+    This is the only injector that edits a payload, and it edits exactly eight bytes of
+    it: the stamp is moved *earlier*, so the data is older when it is published. Arrival
+    times, message sizes and the topic mix are untouched, which is what makes the result
+    attributable — the detector has nothing else to react to.
+    """
+    out: list[tuple[int, Callable[[str, float], float]]] = []
+    for fi, f in enumerate(faults):
+        if f.kind != "stale_pipeline" or not f.topic:
+            continue
+
+        def ramp(tp: str, t: float, target=f.topic, a=f.params["from_ms"] / 1000.0,
+                 b=f.params["to_ms"] / 1000.0, t0=f.t_start, t1=f.t_end) -> float:
+            if tp != target:
+                return 0.0
+            if t <= t0:
+                return a
+            if t >= t1:
+                return b
+            return a + (b - a) * (t - t0) / max(t1 - t0, 1e-9)
+
+        out.append((fi, ramp))
+    return out
+
+
 # ---------------------------------------------------------------------------- writing
 
 
@@ -318,6 +346,7 @@ def inject(
 
     drops = _drop_rules(faults, duration)
     shifts = _shifts(faults)
+    stamp_ramps = _stamp_ramps(faults)
 
     with source.open("rb") as sf:
         summary = make_reader(sf).get_summary()
@@ -369,6 +398,8 @@ def inject(
                 writer.add_message(channel_id=cid, log_time=log_ns,
                                    publish_time=pub_ns, data=data, sequence=seq)
 
+        stamp_offsets: dict[int, int | None] = {}
+
         for _schema, chan, msg in _stream(source, t0_ns, t1_ns):
             topic = topic_of.get(chan.id, chan.topic)
             rel = (msg.log_time - t0_ns) / 1e9
@@ -390,11 +421,31 @@ def inject(
             if first_ns is None or log_ns < first_ns:
                 first_ns = log_ns
             last_ns = max(last_ns, log_ns)
+            data = msg.data
+            for fi, ramp in stamp_ramps:
+                extra = ramp(topic, rel)
+                if not extra:
+                    continue
+                off = stamp_offsets.get(chan.schema_id, False)
+                if off is False:
+                    sch = summary.schemas.get(chan.schema_id)
+                    off = stamp_offset(
+                        sch.data.decode("utf-8", "replace"), sch.encoding or "ros2msg"
+                    ) if sch is not None else None
+                    stamp_offsets[chan.schema_id] = off
+                if off is None:
+                    continue
+                cur = peek_stamp_ns(data, off)
+                if cur is None or cur == 0:
+                    continue
+                data = write_stamp_ns(data, off, cur - int(extra * 1e9))
+                affected[fi] = affected.get(fi, 0) + 1
+
             kept[topic] = kept.get(topic, 0) + 1
             tiebreak += 1
             heapq.heappush(
                 heap,
-                (log_ns, tiebreak, chan_map[chan.id], msg.publish_time, msg.sequence, msg.data),
+                (log_ns, tiebreak, chan_map[chan.id], msg.publish_time, msg.sequence, data),
             )
             flush(REORDER_BUFFER)
         flush(0)

@@ -14,12 +14,19 @@ from typing import NamedTuple, Protocol, runtime_checkable
 
 
 class Arrival(NamedTuple):
-    """One message's timing record. No payload, by design."""
+    """One message's timing record. No payload, by design.
+
+    ``stamp_ns`` is the single, deliberate exception: the capture time out of
+    ``header.stamp``, read as an 8-byte peek at a fixed offset rather than by decoding
+    (see ``stamp_peek``). It is None unless the caller asked for stamps *and* the topic's
+    schema actually has one — None means unmeasurable, never "use the arrival time".
+    """
 
     topic: str
     log_time_ns: int
     publish_time_ns: int
     size_bytes: int
+    stamp_ns: int | None = None
 
 
 @dataclass

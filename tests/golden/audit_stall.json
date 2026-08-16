@@ -226,7 +226,7 @@
     "max_backward_jump_s": 0.0,
     "monotonic": true,
     "provenance": {
-      "method": "single_pass_auditor(cadence,clock,correlation,dropped,file_integrity,gap,jitter,rate_degradation)",
+      "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation)",
       "mission_id": "<volatile>",
       "partial": false,
       "path": "<volatile>",
@@ -249,6 +249,77 @@
     "steps": []
   },
   "continuation_token": "<volatile>",
+  "data_age": {
+    "clock_suspect": false,
+    "endpoints": [
+      "/camera/image_raw",
+      "/imu/data",
+      "/odom",
+      "/scan"
+    ],
+    "stages": [
+      {
+        "age_p50_ms": 0.0,
+        "age_p95_ms": 0.0,
+        "age_p99_ms": 0.0,
+        "link_observations": 0,
+        "messages": 2520,
+        "origin_fraction": 1.0,
+        "stage_p50_ms": null,
+        "stage_p95_ms": null,
+        "stage_p99_ms": null,
+        "topic": "/camera/image_raw",
+        "trend_assessable": true,
+        "upstream": null
+      },
+      {
+        "age_p50_ms": 0.0,
+        "age_p95_ms": 0.0,
+        "age_p99_ms": 0.0,
+        "link_observations": 0,
+        "messages": 8398,
+        "origin_fraction": 1.0,
+        "stage_p50_ms": null,
+        "stage_p95_ms": null,
+        "stage_p99_ms": null,
+        "topic": "/imu/data",
+        "trend_assessable": true,
+        "upstream": null
+      },
+      {
+        "age_p50_ms": 0.0,
+        "age_p95_ms": 0.0,
+        "age_p99_ms": 0.0,
+        "link_observations": 0,
+        "messages": 4201,
+        "origin_fraction": 1.0,
+        "stage_p50_ms": null,
+        "stage_p95_ms": null,
+        "stage_p99_ms": null,
+        "topic": "/odom",
+        "trend_assessable": true,
+        "upstream": null
+      },
+      {
+        "age_p50_ms": 0.0,
+        "age_p95_ms": 0.0,
+        "age_p99_ms": 0.0,
+        "link_observations": 0,
+        "messages": 840,
+        "origin_fraction": 1.0,
+        "stage_p50_ms": null,
+        "stage_p95_ms": null,
+        "stage_p99_ms": null,
+        "topic": "/scan",
+        "trend_assessable": false,
+        "upstream": null
+      }
+    ],
+    "stamp_table_evictions": 0,
+    "unmeasurable": {
+      "/cmd_vel": "geometry_msgs/msg/Twist carries no header.stamp"
+    }
+  },
   "duration_s": 89.999,
   "file_integrity": {
     "chunk_issues": [],
@@ -335,7 +406,7 @@
   "overall_score": 83.0,
   "path": "<volatile>",
   "provenance": {
-    "method": "single_pass_auditor(cadence,clock,correlation,dropped,file_integrity,gap,jitter,rate_degradation)",
+    "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation)",
     "mission_id": "<volatile>",
     "partial": false,
     "path": "<volatile>",

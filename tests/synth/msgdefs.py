@@ -212,6 +212,35 @@ MSG: geometry_msgs/Point
 MSG: geometry_msgs/Quaternion
 {QUATERNION}"""
 
+#: the stamped actuator command. `geometry_msgs/Twist` carries no header, so the age
+#: chain breaks exactly at the actuator — the stage teams most want measured. Where a
+#: robot publishes TwistStamped instead, the chain closes.
+TWIST_STAMPED = f"""\
+std_msgs/Header header
+geometry_msgs/Twist twist
+{SEP}
+MSG: std_msgs/Header
+{HEADER}{SEP}
+MSG: geometry_msgs/Twist
+{TWIST}"""
+
+#: a headered perception output: detections as poses, cheap to build and structurally
+#: identical to what a real detector publishes
+POSE_ARRAY = f"""\
+std_msgs/Header header
+geometry_msgs/Pose[] poses
+{SEP}
+MSG: std_msgs/Header
+{HEADER}{SEP}
+MSG: geometry_msgs/Pose
+geometry_msgs/Point position
+geometry_msgs/Quaternion orientation
+{SEP}
+MSG: geometry_msgs/Point
+{VECTOR3}{SEP}
+MSG: geometry_msgs/Quaternion
+{QUATERNION}"""
+
 MSGDEFS: dict[str, str] = {
     "sensor_msgs/msg/Image": IMAGE,
     "sensor_msgs/msg/PointCloud2": POINTCLOUD2,
@@ -225,4 +254,6 @@ MSGDEFS: dict[str, str] = {
     "rcl_interfaces/msg/Log": LOG,
     "tf2_msgs/msg/TFMessage": TF_MESSAGE,
     "diagnostic_msgs/msg/DiagnosticArray": DIAGNOSTIC_ARRAY,
+    "geometry_msgs/msg/TwistStamped": TWIST_STAMPED,
+    "geometry_msgs/msg/PoseArray": POSE_ARRAY,
 }

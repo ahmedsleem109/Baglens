@@ -20,6 +20,7 @@ from mcap.records import Channel, Message, Schema
 from mcap.stream_reader import StreamReader
 
 from .base import Arrival, BagMetadata, TopicInfo, dotted_get
+from .stamp_peek import peek_stamp_ns, stamp_offset
 
 
 @dataclass
@@ -113,6 +114,12 @@ class McapReader:
         self._decoder_factories: list[Any] | None = None
         #: resume point for a caller tailing a file that has no summary yet
         self._scan = ScanCursor()
+        #: opt-in: fill Arrival.stamp_ns by peeking at the payload. Off by default so the
+        #: payload-free hot path stays payload-free for every caller that does not ask.
+        self.want_stamps = False
+        #: schema_id -> stamp byte offset, or None for "this schema has no stamp".
+        #: Resolved once per schema; the per-message cost is one struct.unpack.
+        self._stamp_offsets: dict[int, int | None] = {}
 
     # -- internals ---------------------------------------------------------
 
@@ -204,11 +211,26 @@ class McapReader:
             for t, c in counts.items()
         ]
 
+    def _stamp_of(self, schema: Any, data: bytes) -> int | None:
+        """The capture stamp, if this schema has one. One dict hit per message."""
+        if schema is None:
+            return None
+        off = self._stamp_offsets.get(schema.id, False)
+        if off is False:
+            off = stamp_offset(
+                schema.data.decode("utf-8", "replace"), schema.encoding or "ros2msg"
+            )
+            self._stamp_offsets[schema.id] = off
+        if off is None:
+            return None
+        return peek_stamp_ns(data, off)
+
     def arrivals(
         self, topics: list[str] | None = None, start_time_ns: int | None = None
     ) -> Iterator[Arrival]:
         meta = self.metadata()
         wanted = set(topics) if topics else None
+        stamps = self.want_stamps
 
         if not meta.has_summary:
             # recovery path: records in file order, which is log order for any recorder.
@@ -217,7 +239,7 @@ class McapReader:
             cursor = self._scan if start_time_ns is not None else None
             if cursor is not None and cursor.last_time_ns > (start_time_ns or 0):
                 cursor = None  # asked to go back before where we are; rescan honestly
-            for _schema, channel, message, _off in recover_messages(self.path, cursor):
+            for schema, channel, message, _off in recover_messages(self.path, cursor):
                 if start_time_ns is not None and message.log_time < start_time_ns:
                     continue
                 if wanted is None or channel.topic in wanted:
@@ -226,6 +248,7 @@ class McapReader:
                         message.log_time,
                         message.publish_time or message.log_time,
                         len(message.data),
+                        self._stamp_of(schema, message.data) if stamps else None,
                     )
             return
 
@@ -234,12 +257,13 @@ class McapReader:
                 topics=topics, start_time=start_time_ns, log_time_order=True
             )
             try:
-                for _schema, channel, message in it:
+                for schema, channel, message in it:
                     yield Arrival(
                         channel.topic,
                         message.log_time,
                         message.publish_time or message.log_time,
                         len(message.data),
+                        self._stamp_of(schema, message.data) if stamps else None,
                     )
             except GeneratorExit:
                 raise
