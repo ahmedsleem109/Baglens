@@ -5,6 +5,7 @@ number rather than accept one.
 
 - [The eight detectors](#the-eight-detectors)
 - [Data age](#data-age-how-old-was-the-data-behind-that-command)
+- [The pre-flight gate](#the-pre-flight-gate-refuse-to-start-a-mission-that-is-already-broken)
 - [The health score, in the open](#the-health-score-in-the-open)
 - [When it refuses to answer](#when-it-refuses-to-answer)
 - [The streaming constraint](#the-streaming-constraint)
@@ -203,6 +204,73 @@ check cannot read as a passed one. That is W15's lesson applied to a new detecto
 
 Details in [`DATA_AGE.md`](../evals/age/DATA_AGE.md); regenerate with
 `uv run python -m evals.age.data_age`.
+
+## The pre-flight gate: refuse to start a mission that is already broken
+
+A field test day costs thousands and gets burned because a node did not launch, a sensor
+came up in the wrong mode, the clock was not synced, or a topic was already degrading
+before anyone drove anywhere. It is discovered that evening, in the bag.
+
+```bash
+baglens preflight --record --from known_good.mcap --out fleet_baseline.json
+baglens preflight --expect fleet_baseline.json --for 30s
+```
+
+Thirty seconds, then one answer: **GO** or **NO-GO**, with reasons and an exit code.
+
+```
+NO-GO — 5,549 messages in 0.4s
+
+2 reason(s) not to fly:
+  FAIL  /scan: 150 of ~300 expected messages (50%); silent for 0.0s of 30s
+  FAIL  /scan: 5.02 Hz vs 10.02 Hz baseline (-50%)
+
+topic_present  4 pass
+coverage       3 pass, 1 fail
+rate           3 pass, 1 fail
+data_age       4 pass
+clock          1 pass
+degrading      1 pass
+tf             1 unchecked
+    ?  transform-tree completeness is not yet implemented (F3)
+
+1 item(s) could not be checked in this window. They are not passes.
+```
+
+**The baseline is captured, never hand-written.** `--record` derives it from a run someone
+was willing to call good, because the rate that matters is the one this robot actually
+achieves, not the one on the sensor's datasheet. A topic the audit could not measure is
+left out, so the gate reports it unchecked rather than comparing against a guess.
+
+**Rate alone is not fitness to fly.** `observed_hz` is the *modal* rate and is robust to
+gaps by design — so a topic silent for twenty of thirty seconds still reports its nominal
+10 Hz and sails through. The gate therefore counts the messages that actually arrived
+against the messages the baseline implies. That check is what catches a node that dropped
+out and came back, and it was added because a 20 s dropout was waved through without it.
+
+**Three statuses, not two.** Thirty seconds is shorter than cadence warmup on a slow
+topic, so some things genuinely cannot be judged. Those are `unchecked` — listed in the
+verdict, never counted as passes — which is `unassessable` applied where the cost of
+getting it wrong is a lost field day. `--strict` makes them fatal. TF completeness is
+F3's and is not built, so the gate says so by name rather than quietly omitting it.
+
+### Measured
+
+From `tests/integration/test_preflight.py`, which is the harness:
+
+| | Result |
+|---|---|
+| Healthy graphs, 10 seeds | **0 false alarms** |
+| Missing topic | caught, names `/scan` |
+| Halved rate | caught, names `/scan` |
+| Topic silent 20 s of 30 | caught, names `/scan` |
+| Clock skew | caught |
+| Already degrading | caught, names `/camera/image_raw` |
+| Verdict latency | **< 35 s** for a 30 s window |
+
+The false-alarm row is the one that decides whether anyone leaves the gate switched on.
+A gate that cries wolf gets disabled, and a disabled gate is worse than no gate because
+everyone still believes it is running.
 
 ## When it refuses to answer
 
