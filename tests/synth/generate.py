@@ -17,7 +17,7 @@ import argparse
 import json
 import math
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -45,6 +45,11 @@ class TopicSpec:
     reliability: int = 1
     #: KEEP_LAST queue depth; a shallow queue on a fast topic discards under load
     depth: int = 10
+    #: seconds between capture and publish, written into `header.stamp` as an offset from
+    #: the publish time. 0.0 keeps the historical behaviour — stamp equals publish — which
+    #: every fixture predating F1 relies on. A real sensor is never 0.0, so the topic sets
+    #: that exercise data age set it explicitly.
+    capture_delay_s: float = 0.0
 
 
 DEFAULT_TOPICS: tuple[TopicSpec, ...] = (
@@ -85,6 +90,56 @@ SMALL_TOPICS: tuple[TopicSpec, ...] = (
     TopicSpec("/scan", "sensor_msgs/msg/LaserScan", 10.0),
     TopicSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 30.0),
     TopicSpec("/cmd_vel", "geometry_msgs/msg/Twist", 20.0),
+)
+
+
+#: the graph a pre-flight gate (F2) is asked to approve. Small on purpose: the gate has
+#: thirty seconds, and a baseline it cannot establish in that window is worse than useless.
+#: Capture delays are set here because the gate checks a data-age budget: a fixture whose
+#: sensors stamp at their own publish time reports an age of zero, and the age check would
+#: be untested dead code. These are the sort of numbers real drivers produce.
+PREFLIGHT_TOPICS: tuple[TopicSpec, ...] = (
+    TopicSpec("/imu/data", "sensor_msgs/msg/Imu", 100.0, deadline_s=0.01,
+              capture_delay_s=0.002),
+    TopicSpec("/odom", "nav_msgs/msg/Odometry", 50.0, capture_delay_s=0.004),
+    TopicSpec("/scan", "sensor_msgs/msg/LaserScan", 10.0, capture_delay_s=0.030),
+    TopicSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 30.0,
+              capture_delay_s=0.018),
+)
+
+
+def preflight_scenario(kind: str) -> tuple[tuple[TopicSpec, ...], list[Fault]]:
+    """(topics, faults) for one pre-flight scenario, named by what is wrong with it.
+
+    Shared by the unit tests and the eval so that "healthy" means one thing. Every
+    scenario is expressible with the existing primitives — a missing topic is a shorter
+    topic list, a halved rate is a different `hz` — which is why F2 needs no new fixture
+    machinery, only an agreed table of cases.
+    """
+    topics = PREFLIGHT_TOPICS
+    if kind == "healthy":
+        return topics, []
+    if kind == "missing_topic":
+        return tuple(s for s in topics if s.topic != "/scan"), []
+    if kind == "halved_rate":
+        # `replace`, not a positional rebuild: the latter silently drops any field added
+        # to TopicSpec later, which is how a fixture stops testing what it claims to
+        return tuple(
+            replace(s, hz=s.hz / 2) if s.topic == "/scan" else s for s in topics
+        ), []
+    if kind == "clock_skew":
+        return topics, [clock_step(12.0, 800.0)]
+    if kind == "already_degrading":
+        return topics, [rate_degradation("/camera/image_raw", 30.0, 12.0, 4.0, 24.0)]
+    if kind == "silent_topic":
+        return topics, [topic_dropout("/scan", 5.0, 25.0)]
+    raise ValueError(f"unknown pre-flight scenario {kind!r}")
+
+
+#: every scenario the gate is scored against. "healthy" must never fail; the rest must.
+PREFLIGHT_SCENARIOS: tuple[str, ...] = (
+    "healthy", "missing_topic", "halved_rate", "clock_skew",
+    "already_degrading", "silent_topic",
 )
 
 
@@ -740,8 +795,10 @@ def generate_bag(
 
         # (log_t, pub_t, topic, stamp_t); stamp_t None means "stamp the publish time",
         # which is what an ordinary sensor topic does
+        capture_delay = {s.topic: s.capture_delay_s for s in all_specs}
         merged: list[tuple[float, float, str, float | None]] = [
-            (log_t, pub_t, tp, None)
+            (log_t, pub_t, tp,
+             pub_t - capture_delay[tp] if capture_delay.get(tp) else None)
             for tp, pairs in schedules.items()
             for pub_t, log_t in pairs
         ]

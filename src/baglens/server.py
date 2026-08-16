@@ -69,6 +69,13 @@ def build_server(modules: tuple[str, ...] = TOOL_MODULES) -> MCPServer:
     return mcp
 
 
+def _preflight_main(argv: list[str]) -> int:
+    """`baglens preflight` — the pre-flight readiness gate. See `baglens/preflight.py`."""
+    from .preflight import main as preflight_main
+
+    return preflight_main(argv)
+
+
 def _gate_main(argv: list[str]) -> int:
     """`baglens gate <dir>` — the training-data gate. See `baglens/gate.py`."""
     import json
@@ -137,7 +144,7 @@ def _gate_main(argv: list[str]) -> int:
 
 #: subcommands that are not the MCP server. `baglens` with no subcommand still starts the
 #: server over stdio, because that is what every MCP client config already invokes.
-SUBCOMMANDS = {"gate": _gate_main}
+SUBCOMMANDS = {"gate": _gate_main, "preflight": _preflight_main}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -147,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(
         prog="baglens",
-        description="MCP server for robot log analysis. Subcommands: gate",
+        description="MCP server for robot log analysis. Subcommands: gate, preflight",
     )
     ap.add_argument("--stdio", action="store_true", help="run over stdio (default)")
     ap.add_argument("--http", action="store_true", help="run over streamable HTTP")

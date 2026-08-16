@@ -208,6 +208,63 @@ class DataAgeReport(BaseModel):
     stamp_table_evictions: int = 0
 
 
+class BaselineTopic(BaseModel):
+    """What one topic looked like on a run that was known good."""
+
+    msg_type: str = ""
+    hz: float = 0.0
+    jitter_cv: float = 0.0
+    #: P95 data age in ms, when it was measurable. None means it was not, and the gate
+    #: must then report age unchecked for this topic rather than assume it is fine.
+    age_p95_ms: float | None = None
+
+
+class Baseline(BaseModel):
+    """A fleet baseline: what "normal" is, captured rather than hand-written.
+
+    Written by `baglens preflight --record` from a run someone was willing to call good.
+    Hand-writing this file is possible and is a bad idea — the numbers that matter are
+    the ones the robot actually produces, not the ones in the datasheet.
+    """
+
+    version: int = 1
+    source: str = ""
+    captured_duration_s: float = 0.0
+    topics: dict[str, BaselineTopic] = Field(default_factory=dict)
+
+
+class PreflightCheck(BaseModel):
+    """One question the gate asked, and what it found.
+
+    `status` has three values, not two. `unchecked` is the one that matters: a topic too
+    slow to establish a baseline inside the window has not passed, and saying so is the
+    difference between a gate and a rubber stamp.
+    """
+
+    check: str  # topic_present | rate | clock | degrading | data_age | tf
+    topic: str | None = None
+    status: Literal["pass", "fail", "unchecked"] = "pass"
+    detail: str = ""
+    observed: float | None = None
+    expected: float | None = None
+
+
+class PreflightReport(BaseModel):
+    """Is this robot fit to record a mission? Green or red, with reasons."""
+
+    verdict: Literal["go", "no_go"] = "go"
+    window_s: float = 0.0
+    elapsed_s: float = 0.0
+    messages: int = 0
+    checks: list[PreflightCheck] = Field(default_factory=list)
+    #: one line per reason the answer is no_go — what a human reads first
+    failures: list[str] = Field(default_factory=list)
+    #: everything the gate could not judge. Never silently empty.
+    unchecked: list[str] = Field(default_factory=list)
+    baseline_source: str = ""
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
 class HealthReport(Budgeted):
     mission_id: str
     path: str = ""

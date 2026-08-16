@@ -179,6 +179,28 @@ class DataAgeConfig:
 
 
 @dataclass(frozen=True)
+class PreflightConfig:
+    """F2 — the pre-flight readiness gate."""
+
+    #: how long the gate watches before answering. Short on purpose: a gate that takes
+    #: five minutes gets skipped, and a skipped gate is worse than none because it
+    #: creates false confidence.
+    window_s: float = 30.0
+    #: observed rate may differ from the baseline by this fraction before it is a failure.
+    #: A halved rate is -50% and must be caught; ordinary run-to-run variation must not be.
+    rate_tolerance: float = 0.25
+    #: a topic must deliver at least this many messages in the window to be judged at all
+    min_messages: int = 20
+    #: observed P95 data age may be this multiple of the baseline's before it fails
+    age_tolerance: float = 2.0
+    #: an absolute floor so a baseline captured at 3 ms does not fail on 7 ms of noise
+    age_floor_ms: float = 20.0
+    #: unchecked items do not fail the gate unless this is set. They are always listed:
+    #: reporting them as passing is the one thing the gate must never do.
+    strict: bool = False
+
+
+@dataclass(frozen=True)
 class CorrelationConfig:
     """D7 — cross-topic gap correlation."""
 
@@ -293,6 +315,7 @@ class Config:
     clock: ClockConfig = field(default_factory=ClockConfig)
     correlation: CorrelationConfig = field(default_factory=CorrelationConfig)
     data_age: DataAgeConfig = field(default_factory=DataAgeConfig)
+    preflight: PreflightConfig = field(default_factory=PreflightConfig)
     assessability: AssessabilityConfig = field(default_factory=AssessabilityConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)

@@ -115,6 +115,36 @@ is reported as what it is rather than converted into a plausible-looking number.
 Reading the stamp costs an 8-byte peek, not a decode — verified against a full decode on
 134 topics across 11 real recordings, zero disagreements.
 
+## Don't burn the field day
+
+```bash
+baglens preflight --expect fleet_baseline.json --for 30s
+```
+
+A test day costs thousands and gets burned because a node didn't launch, a sensor came up
+in the wrong mode, or a topic was already degrading before anyone drove anywhere. You find
+out that evening, in the bag.
+
+Thirty seconds of watching the live graph, then one answer — **GO** or **NO-GO**, with
+reasons and an exit code you can put in a launch file or a CI job:
+
+```
+NO-GO — 5,549 messages in 0.4s
+
+2 reason(s) not to fly:
+  FAIL  /scan: 150 of ~300 expected messages (50%); silent for 0.0s of 30s
+  FAIL  /scan: 5.02 Hz vs 10.02 Hz baseline (-50%)
+```
+
+The baseline isn't hand-written — `preflight --record` captures it from a run that was
+known good, so "normal" is what your robot actually does rather than what a datasheet
+claims. And anything the gate could not check in thirty seconds is reported as
+**unchecked**, never as a pass: a gate that quietly waves through what it didn't measure
+is worse than no gate at all.
+
+Zero false alarms across ten healthy graphs — the number that decides whether anyone
+leaves it switched on.
+
 ## The training-data gate
 
 ```bash

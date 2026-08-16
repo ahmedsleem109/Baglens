@@ -11,6 +11,25 @@ follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`baglens preflight` — the pre-flight readiness gate (F2)** — `src/baglens/preflight.py`.
+  Watches the live graph for thirty seconds and answers one question with an exit code:
+  is this robot fit to record a mission? Checks every expected topic is present and
+  publishing, that message *coverage* and rate match a captured baseline, that clocks are
+  consistent, that nothing is already degrading, and that data age is inside budget (F1).
+  `--record` captures the baseline from a run that was known good, so "normal" is derived
+  rather than declared. Exit code, `--json`, and one screen of text from the same run.
+  **Zero false alarms across ten healthy synthetic graphs**; catches a missing topic, a
+  halved rate, a topic silent for 20 s of 30, clock skew, and an already-degrading rate,
+  naming the topic in each case; verdict well inside the 35 s budget
+  (`tests/integration/test_preflight.py`).
+- Anything the gate cannot judge inside its window is reported **`unchecked`** and listed
+  in the verdict — never counted as a pass. `--strict` makes unchecked items fatal. TF
+  completeness belongs to F3 and is not implemented, so the gate says so by name instead
+  of silently omitting it.
+- `TopicSpec.capture_delay_s` in the synthetic generator, so a fixture's `header.stamp`
+  can differ from its publish time the way a real sensor's does. Defaults to 0.0, leaving
+  every fixture that predates F1 byte-identical.
+
 - **End-to-end data age (F1)** — `src/baglens/detectors/age.py`, `health.data_age`.
   Follows `header.stamp` to report how old the data behind each topic was: P50/P95/P99 per
   topic, per stage where a chain exists, and a trend on the P99 tail. Single-pass,
