@@ -11,7 +11,18 @@ one above it is done, and the reason is given in each case.
 
 # START HERE — the moat plan
 
-**M1–M4 are done (2026-08-16). M5 is the remaining work: the repo is still private.**
+> ## ⚠️ This file is finished. The current spec is [`NEWFEATURES.md`](NEWFEATURES.md).
+>
+> M1–M4 landed 2026-08-16 and M5 shipped: the repo is public, described, and every
+> published number regenerated. What remains of M5 needs a human — a PyPI trusted
+> publisher, a `v0.3.0` tag, and the announcement.
+>
+> **Do not plan work from this file.** It is now a record of what was done and why, kept
+> for its weakness register and for the negative results at the bottom, which are the part
+> most likely to be re-derived the hard way. Build order for what comes next — data age,
+> pre-flight, TF integrity, node attribution — is in `NEWFEATURES.md`.
+
+**M1–M4 are done (2026-08-16). M5 shipped except for the steps that need a human.**
 
 The goal they add up to: **the only robot-recording tool that publishes field-measured
 precision and recall for every detector, and that refuses to answer when it cannot.**
