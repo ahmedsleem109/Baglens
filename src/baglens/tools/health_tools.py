@@ -21,6 +21,7 @@ from ..models import (
     HealthReport,
     Severity,
     Timeline,
+    TransformReport,
 )
 from ..provenance import Provenance
 from .common import audit, find_finding, resolve
@@ -479,6 +480,37 @@ def register(mcp: Any) -> None:
         """
         report, _ = audit(path, None, ["clock", "data_age"], CONFIG.sensitivity)
         return report.data_age or DataAgeReport()
+
+    @mcp.tool(name="health.transform_health")
+    def transform_health(path: str) -> TransformReport:
+        """The transform tree, already diagnosed — a `view_frames` that says what is wrong.
+
+        `ros2 run tf2_tools view_frames` draws the tree and leaves the diagnosis to a
+        human squinting at a PDF. This returns the same tree with the answer applied, so
+        you can act on it directly. Pair it with `health.audit_recording` and read the
+        `transforms` findings there for the reasoning behind each one.
+
+        What to look at, in order:
+
+        * `orphan_frames` — a frame a topic publishes in that **no transform provides**.
+          Nothing can place that sensor's data in the world. Usually a static transform
+          nobody launched. If `/tf_static` was recorded but empty, suspect the recording
+          rather than the robot: static transforms are latched, so a recorder that started
+          late never saw them.
+        * `edges[].disagreements` — two publishers fighting over one transform, with
+          `max_disagreement_m` showing how far apart they are. Silent and vicious: the
+          pose flips depending on which message arrived last.
+        * `edges[].present_fraction` — below 1.0 on a non-static transform means the chain
+          existed only intermittently, and every lookup in the gaps silently returned a
+          stale pose.
+        * `edges[].mean_stamp_lag_ms` — **negative means stamped into the future**, which
+          is what produces the extrapolation errors everyone recognises.
+
+        `baglens frames <recording> --out tree.pdf` renders this same analysis as a
+        printable page with the problem edges coloured.
+        """
+        report, _ = audit(path, None, ["cadence", "transforms"], CONFIG.sensitivity)
+        return report.transforms or TransformReport()
 
     @mcp.tool(name="health.topic_timeline")
     def topic_timeline(path: str, width: int = 100) -> Timeline:

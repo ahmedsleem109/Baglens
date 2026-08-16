@@ -208,6 +208,38 @@ class DataAgeReport(BaseModel):
     stamp_table_evictions: int = 0
 
 
+class TransformEdge(BaseModel):
+    """One parent→child transform, and how well it behaves."""
+
+    parent: str
+    child: str
+    count: int = 0
+    hz: float = 0.0
+    static: bool = False
+    max_gap_s: float = 0.0
+    #: fraction of time buckets this transform existed in. Below 1.0 on a dynamic
+    #: transform is the "complete only intermittently" fault.
+    present_fraction: float = 1.0
+    #: publish time minus stamp. Negative means stamped into the future.
+    mean_stamp_lag_ms: float = 0.0
+    duplicate_stamps: int = 0
+    disagreements: int = 0
+    max_disagreement_m: float = 0.0
+
+
+class TransformReport(BaseModel):
+    """F3 — the transform tree, diagnosed rather than drawn."""
+
+    roots: list[str] = Field(default_factory=list)
+    edges: list[TransformEdge] = Field(default_factory=list)
+    #: frame -> the topic that publishes in it, for frames no transform provides. This is
+    #: the static transform nobody launched, and it is invisible from `/tf` alone.
+    orphan_frames: dict[str, str] = Field(default_factory=dict)
+    #: topic -> the frame it claims to publish in
+    consumer_frames: dict[str, str] = Field(default_factory=dict)
+    dropped_edges: int = 0
+
+
 class BaselineTopic(BaseModel):
     """What one topic looked like on a run that was known good."""
 
@@ -282,6 +314,7 @@ class HealthReport(Budgeted):
     file_integrity: FileIntegrity | None = None
     clock: ClockReport | None = None
     data_age: DataAgeReport | None = None
+    transforms: TransformReport | None = None
     #: what an analyst must NOT conclude from this data
     caveats: list[str] = Field(default_factory=list)
     provenance: Provenance = Field(default_factory=Provenance)

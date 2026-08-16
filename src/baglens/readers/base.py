@@ -27,6 +27,14 @@ class Arrival(NamedTuple):
     publish_time_ns: int
     size_bytes: int
     stamp_ns: int | None = None
+    #: the header's `frame_id`, sampled for the first messages of each topic only — it
+    #: answers "which frames does this sensor claim to be in", which does not change
+    #: message to message, so paying for it on every message would be waste.
+    frame_id: str | None = None
+    #: the decoded message, and only for topics the caller explicitly asked to decode.
+    #: `/tf` is a batch of transforms with no top-level header, so it cannot be peeked
+    #: at — F3 has to pay for a real decode, and this is where that cost is opted into.
+    decoded: object | None = None
 
 
 @dataclass

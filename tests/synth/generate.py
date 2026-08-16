@@ -144,6 +144,144 @@ PREFLIGHT_SCENARIOS: tuple[str, ...] = (
 
 
 @dataclass
+class TfEdgeSpec:
+    """One parent→child transform, and how it misbehaves (F3).
+
+    `/tf` is many streams in one topic, so a TF fixture is a set of these rather than a
+    `TopicSpec`. Every field here corresponds to a failure someone has actually lost a
+    week to.
+    """
+
+    parent: str
+    child: str
+    hz: float = 20.0
+    #: published on `/tf_static` instead of `/tf` — latched once, at the start
+    static: bool = False
+    #: seconds added to the transform's stamp. Positive means stamped into the *future*,
+    #: which is what produces "lookup would require extrapolation into the future".
+    stamp_offset_s: float = 0.0
+    #: a second node publishing the same edge, slightly later and with a different value.
+    #: Silent and vicious: consumers see the two fight, and nothing reports it.
+    duplicate_publisher: bool = False
+    #: how far the duplicate disagrees, in metres
+    duplicate_disagreement_m: float = 0.35
+    #: windows during which this edge is not published at all, breaking the chain
+    gaps: tuple[tuple[float, float], ...] = ()
+    #: never published at all — the static transform nobody remembered to launch
+    absent: bool = False
+
+
+#: a small, realistic tree: map -> odom -> base_link -> {laser, camera}
+BASE_TF: tuple[TfEdgeSpec, ...] = (
+    TfEdgeSpec("map", "odom", hz=20.0),
+    TfEdgeSpec("odom", "base_link", hz=50.0),
+    TfEdgeSpec("base_link", "laser", hz=0.0, static=True),
+    TfEdgeSpec("base_link", "camera", hz=0.0, static=True),
+)
+
+
+def tf_scenario(kind: str) -> tuple[TfEdgeSpec, ...]:
+    """The TF tree for one scenario, named by what is wrong with it."""
+    edges = BASE_TF
+    if kind == "healthy":
+        return edges
+    if kind == "duplicate_publisher":
+        return tuple(
+            replace(e, duplicate_publisher=True) if (e.parent, e.child) == ("map", "odom")
+            else e for e in edges
+        )
+    if kind == "missing_static":
+        return tuple(
+            replace(e, absent=True) if (e.parent, e.child) == ("base_link", "laser")
+            else e for e in edges
+        )
+    if kind == "stamped_ahead":
+        return tuple(
+            replace(e, stamp_offset_s=0.2) if (e.parent, e.child) == ("odom", "base_link")
+            else e for e in edges
+        )
+    if kind == "intermittent_chain":
+        return tuple(
+            replace(e, gaps=((20.0, 26.0), (44.0, 51.0))) if (e.parent, e.child) == ("map", "odom")
+            else e for e in edges
+        )
+    raise ValueError(f"unknown tf scenario {kind!r}")
+
+
+#: scored scenarios. "healthy" must produce nothing; each other must be caught by name.
+TF_SCENARIOS: tuple[str, ...] = (
+    "healthy", "duplicate_publisher", "missing_static", "stamped_ahead",
+    "intermittent_chain",
+)
+
+#: sensors whose stamps the transforms are supposed to align with. Extrapolation risk is
+#: only meaningful against a consumer, so a TF fixture needs one.
+TF_CONSUMERS: tuple[TopicSpec, ...] = (
+    TopicSpec("/scan", "sensor_msgs/msg/LaserScan", 10.0, capture_delay_s=0.030),
+    TopicSpec("/camera/image_raw", "sensor_msgs/msg/CompressedImage", 30.0,
+              capture_delay_s=0.018),
+)
+
+
+def _tf_payload(rows: list[tuple[TfEdgeSpec, float, float]]) -> dict[str, Any]:
+    """One TFMessage carrying every transform due at this instant."""
+    return {
+        "transforms": [
+            {
+                "header": _header(stamp_t, e.parent),
+                "child_frame_id": e.child,
+                "transform": {
+                    "translation": {
+                        "x": 0.5 * stamp_t + offset,
+                        "y": 2.0 * math.sin(stamp_t / 10),
+                        "z": 0.0,
+                    },
+                    "rotation": {"x": 0.0, "y": 0.0, "z": math.sin(stamp_t / 20),
+                                 "w": math.cos(stamp_t / 20)},
+                },
+            }
+            for e, stamp_t, offset in rows
+        ]
+    }
+
+
+def _tf_messages(
+    edges: tuple[TfEdgeSpec, ...], duration: float, rng: random.Random
+) -> list[tuple[float, float, str, dict[str, Any]]]:
+    """(log_t, pub_t, topic, payload) for `/tf` and `/tf_static`.
+
+    Dynamic transforms are batched per publish instant the way a real `tf2` broadcaster
+    batches them; static ones are latched once at the start, which is what makes an absent
+    static transform so hard to spot — there is no rate to go missing.
+    """
+    out: list[tuple[float, float, str, dict[str, Any]]] = []
+
+    statics = [e for e in edges if e.static and not e.absent]
+    if statics:
+        out.append((0.0, 0.0, "/tf_static",
+                    _tf_payload([(e, 0.0, 0.0) for e in statics])))
+
+    for e in edges:
+        if e.static or e.absent or e.hz <= 0:
+            continue
+        for t in _schedule(e.hz, duration, rng, 0.02):
+            if any(lo <= t < hi for lo, hi in e.gaps):
+                continue
+            out.append((t, t, "/tf", _tf_payload([(e, t + e.stamp_offset_s, 0.0)])))
+            if e.duplicate_publisher:
+                # a second broadcaster, a few milliseconds behind and disagreeing. Same
+                # edge, same stamp: from a consumer's side this is one transform that
+                # will not hold still.
+                t2 = t + 0.004
+                out.append((t2, t2, "/tf",
+                            _tf_payload([(e, t + e.stamp_offset_s,
+                                          e.duplicate_disagreement_m)])))
+
+    out.sort(key=lambda r: r[0])
+    return out
+
+
+@dataclass
 class StageSpec:
     """One stage of a stamp-propagating pipeline (F1).
 
@@ -728,6 +866,7 @@ def generate_bag(
     faults: list[Fault] | None = None,
     compression: bool = True,
     pipelines: tuple[PipelineSpec, ...] = (),
+    tf_edges: tuple[TfEdgeSpec, ...] = (),
 ) -> dict[str, Any]:
     """Write one MCAP with the given faults injected. Returns the ground truth dict."""
     path = Path(path)
@@ -741,8 +880,14 @@ def generate_bag(
     stage_topics = {st.topic for pipe in pipelines for st in pipe.stages}
     topics = tuple(s for s in topics if s.topic not in stage_topics)
 
+    # `/tf` is produced here, not by a TopicSpec: it is many streams in one topic and its
+    # payload is a batch, so it cannot come from `_payload(msg_type, t, i)`
+    if tf_edges:
+        topics = tuple(s for s in topics if s.topic not in ("/tf", "/tf_static"))
+
     schedules = _apply_faults(topics, duration_s, faults, rng)
     pipeline_msgs = _pipeline_messages(pipelines, duration_s, faults, rng)
+    tf_msgs = _tf_messages(tf_edges, duration_s, rng)
 
     encoders: dict[str, Any] = {}
     schema_ids: dict[str, int] = {}
@@ -764,6 +909,9 @@ def generate_bag(
             TopicSpec(st.topic, st.msg_type, pipe.hz, jitter_cv=pipe.jitter_cv)
             for pipe in pipelines
             for st in pipe.stages
+        ) + tuple(
+            TopicSpec(name, "tf2_msgs/msg/TFMessage", 0.0)
+            for name in sorted({tp for _l, _p, tp, _d in tf_msgs})
         )
         declared: set[str] = set()
         all_specs: list[TopicSpec] = []
@@ -796,20 +944,23 @@ def generate_bag(
         # (log_t, pub_t, topic, stamp_t); stamp_t None means "stamp the publish time",
         # which is what an ordinary sensor topic does
         capture_delay = {s.topic: s.capture_delay_s for s in all_specs}
-        merged: list[tuple[float, float, str, float | None]] = [
+        # (log_t, pub_t, topic, stamp_t, explicit payload or None)
+        merged: list[tuple[float, float, str, float | None, dict[str, Any] | None]] = [
             (log_t, pub_t, tp,
-             pub_t - capture_delay[tp] if capture_delay.get(tp) else None)
+             pub_t - capture_delay[tp] if capture_delay.get(tp) else None, None)
             for tp, pairs in schedules.items()
             for pub_t, log_t in pairs
         ]
-        merged.extend(pipeline_msgs)
+        merged.extend((lt, pt, tp, st, None) for lt, pt, tp, st in pipeline_msgs)
+        merged.extend((lt, pt, tp, None, payload) for lt, pt, tp, payload in tf_msgs)
         merged.sort(key=lambda r: (r[0], r[2]))
 
-        for log_t, pub_t, tp, stamp_t in merged:
+        for log_t, pub_t, tp, stamp_t, explicit in merged:
             i = seqs[tp]
             seqs[tp] = i + 1
             data = encoders[type_of[tp]](
-                _payload(type_of[tp], pub_t, i, rng, stamp_t=stamp_t)
+                explicit if explicit is not None
+                else _payload(type_of[tp], pub_t, i, rng, stamp_t=stamp_t)
             )
             writer.add_message(
                 channel_id=channel_ids[tp],

@@ -2,7 +2,7 @@
   "bucket_s": 1.5,
   "legend": "\u2588 busiest \u00b7 \u2593\u2592\u2591\u00b7 lighter \u00b7 (blank) silent \u2014 60 columns of 1.50s",
   "provenance": {
-    "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation)",
+    "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation,transforms)",
     "mission_id": "<volatile>",
     "partial": false,
     "path": "<volatile>",
