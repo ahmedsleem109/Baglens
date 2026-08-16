@@ -26,7 +26,6 @@ Three things it has to get right, none of them about detection:
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 

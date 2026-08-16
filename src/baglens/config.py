@@ -179,6 +179,40 @@ class DataAgeConfig:
 
 
 @dataclass(frozen=True)
+class TransformsConfig:
+    """F3 — transform integrity. `/tf` is many streams in one topic."""
+
+    #: per parent→child state is small, but a tree is not. Bounded, with the truncation
+    #: reported the way D2 and D7 report theirs.
+    max_edges: int = 512
+    #: two transforms for one stamp differing by more than this are two publishers
+    #: fighting, not one publisher repeating itself
+    disagreement_m: float = 0.05
+    min_duplicate_observations: int = 10
+    #: fraction of a transform's messages stamped ahead of their own publish time
+    ahead_fraction: float = 0.5
+    #: a dynamic transform absent from this fraction of buckets is intermittent
+    bucket_s: float = 1.0
+    min_buckets: int = 20
+    min_presence: float = 0.95
+    #: a gap counts once it exceeds this multiple of the transform's own period
+    gap_factor: float = 3.0
+    #: fraction of a consumer's messages newer than the whole tree before it is reported
+    extrapolation_fraction: float = 0.05
+    min_extrapolation_samples: int = 50
+    #: A sensor stamp is *always* a few milliseconds newer than the last transform —
+    #: transforms arrive at discrete instants, so between two of them the newest one is
+    #: already stale. tf2 resolves that on the next cycle and nobody notices. Only a
+    #: sensor further ahead than roughly one transform cycle is a genuine extrapolation
+    #: risk; without this a healthy tree reports 6%, which is a race condition, not a bug.
+    extrapolation_tolerance_s: float = 0.05
+    #: extrapolation is only judged while transforms are actually flowing. Past this,
+    #: the tree is simply not being published and the intermittency check owns the
+    #: diagnosis — otherwise one TF outage is restated once per consumer topic.
+    tf_live_window_s: float = 1.0
+
+
+@dataclass(frozen=True)
 class PreflightConfig:
     """F2 — the pre-flight readiness gate."""
 
@@ -316,6 +350,7 @@ class Config:
     correlation: CorrelationConfig = field(default_factory=CorrelationConfig)
     data_age: DataAgeConfig = field(default_factory=DataAgeConfig)
     preflight: PreflightConfig = field(default_factory=PreflightConfig)
+    transforms: TransformsConfig = field(default_factory=TransformsConfig)
     assessability: AssessabilityConfig = field(default_factory=AssessabilityConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)

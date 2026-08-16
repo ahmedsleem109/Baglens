@@ -126,6 +126,29 @@ def peek_stamp_ns(data: bytes, offset: int = _STAMP_OFFSET) -> int | None:
     return sec * 1_000_000_000 + nanosec
 
 
+def peek_frame_id(data: bytes, offset: int = _STAMP_OFFSET, max_len: int = 128) -> str | None:
+    """The `frame_id` that follows the stamp, still without decoding the message.
+
+    In a `std_msgs/Header` the string comes straight after the two time fields, as a
+    4-byte length and then that many bytes including a NUL. F3 needs it to answer a
+    question nothing else can: which coordinate frames does this sensor claim to be in,
+    and does the transform tree actually connect them? A frame a sensor publishes in but
+    that no transform ever provides is a static transform nobody launched.
+
+    Returns None rather than guessing when the length is implausible — the schema gate
+    says a Header is here, but a truncated or unexpected message must not become a frame.
+    """
+    start = offset + 8
+    if len(data) < start + 4:
+        return None
+    little = bool(data[1] & 1)
+    (n,) = struct.unpack_from("<I" if little else ">I", data, start)
+    if n == 0 or n > max_len or len(data) < start + 4 + n:
+        return None
+    raw = data[start + 4 : start + 4 + n]
+    return raw.split(b"\x00", 1)[0].decode("ascii", "replace") or None
+
+
 def write_stamp_ns(data: bytes, offset: int, stamp_ns: int) -> bytes:
     """``data`` with its stamp replaced. Used only by the fault injector.
 

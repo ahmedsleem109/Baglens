@@ -115,6 +115,38 @@ is reported as what it is rather than converted into a plausible-looking number.
 Reading the stamp costs an 8-byte peek, not a decode — verified against a full decode on
 134 topics across 11 real recordings, zero disagreements.
 
+## TF, diagnosed instead of drawn
+
+`ros2 run tf2_tools view_frames` gives you a PDF of the transform tree and leaves you to
+find the problem in it. This gives you the problem:
+
+```bash
+baglens frames mission.mcap
+```
+
+```
+1 transform finding(s):
+  HIGH     map→odom is published by more than one source, disagreeing by up to 0.35 m
+           Two nodes are fighting over one transform. Consumers see the pose flip
+           between them depending on which arrived last, and nothing in ROS reports it.
+
+tree: 4 transform(s), roots ['map']
+               base_link -> camera         static
+               base_link -> laser          static
+                     map -> odom           22 Hz  2 publishers ±0.35 m
+                    odom -> base_link      50 Hz
+```
+
+It catches the four that cost the most: **two nodes fighting over one transform**, a
+**frame nothing provides** (the static transform nobody launched), transforms **stamped
+into the future**, and a chain that is **complete only intermittently**.
+
+`--out tree.pdf` renders the same analysis as a printable page with the broken edges
+coloured — no graphviz needed, the PDF is written directly. `--json`, and the
+`health.transform_health` MCP tool, hand the whole thing to an agent as structured data,
+so it can act on the diagnosis rather than parse a picture. Non-zero exit when something
+is wrong, so it drops straight into CI.
+
 ## Don't burn the field day
 
 ```bash

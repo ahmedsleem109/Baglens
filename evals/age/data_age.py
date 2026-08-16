@@ -37,7 +37,6 @@ from tests.synth.generate import (
     DEFAULT_PIPELINE,
     RESTAMPING_PIPELINE,
     UNSTAMPED_PIPELINE,
-    PipelineSpec,
     generate_bag,
     stale_pipeline,
 )

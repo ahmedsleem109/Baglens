@@ -224,7 +224,7 @@
     "max_backward_jump_s": 0.0,
     "monotonic": true,
     "provenance": {
-      "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation)",
+      "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation,transforms)",
       "mission_id": "<volatile>",
       "partial": false,
       "path": "<volatile>",
@@ -342,7 +342,7 @@
   "overall_score": 100.0,
   "path": "<volatile>",
   "provenance": {
-    "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation)",
+    "method": "single_pass_auditor(cadence,clock,correlation,data_age,dropped,file_integrity,gap,jitter,rate_degradation,transforms)",
     "mission_id": "<volatile>",
     "partial": false,
     "path": "<volatile>",
@@ -445,6 +445,18 @@
       "total_silent_s": 0.0
     }
   ],
+  "transforms": {
+    "consumer_frames": {
+      "/camera/image_raw": "camera",
+      "/imu/data": "imu_link",
+      "/odom": "odom",
+      "/scan": "laser"
+    },
+    "dropped_edges": 0,
+    "edges": [],
+    "orphan_frames": {},
+    "roots": []
+  },
   "truncated": false,
   "verdict": "trustworthy"
 }

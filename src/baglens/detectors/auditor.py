@@ -20,6 +20,7 @@ from ..models import (
     HealthReport,
     Severity,
     TopicHealth,
+    TransformReport,
 )
 from ..provenance import Provenance, mission_id_for
 from ..readers.base import BagReader
@@ -37,6 +38,7 @@ ALL_DETECTORS = (
     "correlation",
     "file_integrity",
     "data_age",
+    "transforms",
 )
 
 
@@ -85,6 +87,7 @@ class Auditor:
         self.clock: Any = None
         self.correlation: Any = None
         self.data_age: Any = None
+        self.transforms: Any = None
         self.integrity: FileIntegrity | None = None
         self.timeline = TimelineAccumulator()
         #: content-derived mission id, resolved on first report and then carried
@@ -134,6 +137,20 @@ class Auditor:
             self.correlation = CorrelationDetector(
                 self.cfg, expected_topics=self._expected_topic_count()
             )
+        if "transforms" in self.enabled and self.transforms is None:
+            from .transforms import TransformDetector
+
+            self.transforms = TransformDetector(self.cfg)
+            static = self.meta.topic("/tf_static")
+            self.transforms.static_declared_but_empty = bool(
+                static is not None and static.count == 0
+            )
+            # TFMessage has no top-level header, so unlike F1 this cannot be peeked at:
+            # a real decode is opted into, for these two topics and no others.
+            if hasattr(self.reader, "decode_topics"):
+                self.reader.decode_topics |= {"/tf", "/tf_static"}
+            if hasattr(self.reader, "want_stamps"):
+                self.reader.want_stamps = True
         if "data_age" in self.enabled and self.data_age is None:
             from .age import DataAgeDetector
 
@@ -196,6 +213,8 @@ class Auditor:
             self.clock.on_arrival(arrival.topic, t, pub_t)
         if self.correlation is not None:
             self.correlation.on_arrival(arrival.topic, t, dt, st.cadence.provisional_period)
+        if self.transforms is not None:
+            self.transforms.on_arrival(arrival.topic, t, pub_t_ns, arrival)
         if self.data_age is not None:
             self.data_age.on_arrival(
                 arrival.topic, t, pub_t_ns, arrival.stamp_ns, self.t0_ns, st.msg_type
@@ -245,6 +264,7 @@ class Auditor:
             "clock": self.clock.to_state() if self.clock is not None else None,
             "correlation": self.correlation.to_state() if self.correlation is not None else None,
             "data_age": self.data_age.to_state() if self.data_age is not None else None,
+            "transforms": self.transforms.to_state() if self.transforms is not None else None,
             "topics": {
                 topic: {
                     "msg_type": st.msg_type,
@@ -289,6 +309,14 @@ class Auditor:
             # a hook, not state: it closes over this auditor and must be re-attached to
             # the restored one, or a resumed pass would judge topics the first pass would
             # have refused to judge
+        if state.get("transforms") is not None:
+            from .transforms import TransformDetector
+
+            obj.transforms = TransformDetector.from_state(state["transforms"], obj.cfg)
+            if hasattr(obj.reader, "decode_topics"):
+                obj.reader.decode_topics |= {"/tf", "/tf_static"}
+            if hasattr(obj.reader, "want_stamps"):
+                obj.reader.want_stamps = True
         if state.get("data_age") is not None:
             from .age import DataAgeDetector
 
@@ -457,6 +485,11 @@ class Auditor:
             findings += self.data_age.finalize(self.t_end)
             age_report = DataAgeReport(**self.data_age.report())
 
+        tf_report = None
+        if self.transforms is not None:
+            findings += self.transforms.finalize(self.t_end)
+            tf_report = TransformReport(**self.transforms.report())
+
         if self.integrity is not None:
             findings += _integrity_findings(self.integrity, self.t_end, self.t0 or 0.0)
 
@@ -492,6 +525,7 @@ class Auditor:
             file_integrity=self.integrity,
             clock=clock_report,
             data_age=age_report,
+            transforms=tf_report,
             assessability=assessability,
             caveats=build_caveats(findings, topics, self.integrity, assessability),
             provenance=prov,

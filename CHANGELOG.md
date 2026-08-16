@@ -11,6 +11,27 @@ follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Transform integrity (F3)** — `src/baglens/detectors/transforms.py`,
+  `baglens frames`, `health.transform_health`. `/tf` is treated as the many streams it
+  actually is, with per parent→child state bounded at `max_edges` and the truncation
+  reported. Catches the four silent ones: **duplicate publishers** (with how far apart
+  they are in metres), **frames nothing provides** (the static transform nobody launched),
+  transforms **stamped into the future**, and **intermittent tree completeness**. Zero
+  findings on a healthy tree across five seeds; each fault caught and named
+  (`tests/integration/test_transforms.py`). Decode cost **+11.4%**, measured on a real
+  recording — `tf2_msgs/TFMessage` is a bare sequence with no top-level header, so this
+  is the one detector that cannot use F1's peek and pays for a real decode.
+- **`baglens frames <recording>`** — the transform tree with the diagnosis already
+  applied, as text, `--json` for an agent, or `--out tree.pdf|svg|dot` for a printable
+  page with the broken edges coloured. The PDF is written directly: no graphviz, no
+  cairo, ~2 KB per page, because the machine that most needs this is a field laptop with
+  nothing installed. Non-zero exit when there are findings.
+- **`peek_frame_id`** — reads the `frame_id` following `header.stamp`, still without
+  deserializing, sampled for the first 200 messages of each topic. It is the only way to
+  know a frame was *expected*, which is what makes an absent transform detectable at all.
+- `Arrival.decoded` and `reader.decode_topics` — opt-in full decoding for named topics,
+  so the payload-free path stays payload-free for everything except `/tf`.
+
 - **`baglens preflight` — the pre-flight readiness gate (F2)** — `src/baglens/preflight.py`.
   Watches the live graph for thirty seconds and answers one question with an exit code:
   is this robot fit to record a mission? Checks every expected topic is present and

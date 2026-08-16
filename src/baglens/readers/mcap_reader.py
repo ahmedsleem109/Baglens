@@ -20,7 +20,7 @@ from mcap.records import Channel, Message, Schema
 from mcap.stream_reader import StreamReader
 
 from .base import Arrival, BagMetadata, TopicInfo, dotted_get
-from .stamp_peek import peek_stamp_ns, stamp_offset
+from .stamp_peek import peek_frame_id, peek_stamp_ns, stamp_offset
 
 
 @dataclass
@@ -120,6 +120,13 @@ class McapReader:
         #: schema_id -> stamp byte offset, or None for "this schema has no stamp".
         #: Resolved once per schema; the per-message cost is one struct.unpack.
         self._stamp_offsets: dict[int, int | None] = {}
+        #: topics to hand back fully decoded. Empty by default — decoding is the thing
+        #: this reader exists to avoid, and F3's `/tf` is the one case that needs it.
+        self.decode_topics: set[str] = set()
+        self._decoders: dict[int, Any] = {}
+        #: how many messages per topic to read a frame_id from before giving up on it
+        self.frame_samples = 200
+        self._frames_read: dict[str, int] = {}
 
     # -- internals ---------------------------------------------------------
 
@@ -225,6 +232,35 @@ class McapReader:
             return None
         return peek_stamp_ns(data, off)
 
+    def _frame_of(self, topic: str, schema: Any, data: bytes) -> str | None:
+        """A frame_id, for the first `frame_samples` messages of each topic only."""
+        seen = self._frames_read.get(topic, 0)
+        if seen >= self.frame_samples or schema is None:
+            return None
+        self._frames_read[topic] = seen + 1
+        off = self._stamp_offsets.get(schema.id)
+        return peek_frame_id(data, off) if off is not None else None
+
+    def _decode(self, schema: Any, data: bytes) -> object | None:
+        if schema is None:
+            return None
+        dec = self._decoders.get(schema.id)
+        if dec is None:
+            for factory in self._factories():
+                try:
+                    dec = factory.decoder_for("cdr", schema)
+                except Exception:
+                    dec = None
+                if dec is not None:
+                    break
+            if dec is None:
+                return None
+            self._decoders[schema.id] = dec
+        try:
+            return dec(data)
+        except Exception:
+            return None
+
     def arrivals(
         self, topics: list[str] | None = None, start_time_ns: int | None = None
     ) -> Iterator[Arrival]:
@@ -249,6 +285,10 @@ class McapReader:
                         message.publish_time or message.log_time,
                         len(message.data),
                         self._stamp_of(schema, message.data) if stamps else None,
+                        self._frame_of(channel.topic, schema, message.data)
+                        if stamps else None,
+                        self._decode(schema, message.data)
+                        if channel.topic in self.decode_topics else None,
                     )
             return
 
@@ -264,6 +304,10 @@ class McapReader:
                         message.publish_time or message.log_time,
                         len(message.data),
                         self._stamp_of(schema, message.data) if stamps else None,
+                        self._frame_of(channel.topic, schema, message.data)
+                        if stamps else None,
+                        self._decode(schema, message.data)
+                        if channel.topic in self.decode_topics else None,
                     )
             except GeneratorExit:
                 raise

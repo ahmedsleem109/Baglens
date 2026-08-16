@@ -5,6 +5,7 @@ number rather than accept one.
 
 - [The eight detectors](#the-eight-detectors)
 - [Data age](#data-age-how-old-was-the-data-behind-that-command)
+- [Transform integrity](#transform-integrity-a-view_frames-that-tells-you-what-is-wrong)
 - [The pre-flight gate](#the-pre-flight-gate-refuse-to-start-a-mission-that-is-already-broken)
 - [The health score, in the open](#the-health-score-in-the-open)
 - [When it refuses to answer](#when-it-refuses-to-answer)
@@ -204,6 +205,92 @@ check cannot read as a passed one. That is W15's lesson applied to a new detecto
 
 Details in [`DATA_AGE.md`](../evals/age/DATA_AGE.md); regenerate with
 `uv run python -m evals.age.data_age`.
+
+## Transform integrity: a `view_frames` that tells you what is wrong
+
+`ros2 run tf2_tools view_frames` draws the TF tree into a PDF and leaves the diagnosis to
+a human squinting at it. That is the wrong division of labour — the tool has every number
+it needs to say *which* edge is broken and *how*.
+
+```bash
+baglens frames mission.mcap                 # the tree and its diagnosis, as text
+baglens frames mission.mcap --out tree.pdf  # ...as a printable page
+baglens frames mission.mcap --json          # ...as structured data, for an agent
+```
+
+```
+1 transform finding(s):
+  HIGH     map→odom is published by more than one source, disagreeing by up to 0.35 m
+           Two nodes are fighting over one transform. Consumers see the pose flip
+           between them depending on which arrived last, and nothing in ROS reports it.
+
+tree: 4 transform(s), roots ['map']
+               base_link -> camera         static
+               base_link -> laser          static
+                     map -> odom           22 Hz  2 publishers ±0.35 m
+                    odom -> base_link      50 Hz
+```
+
+Exit code is non-zero when there are findings, so it drops into CI. `--json` gives an
+agent the tree, the per-edge measurements and the findings in one object; `health.transform_health`
+is the same thing over MCP.
+
+### The four silent ones
+
+| Check | What it catches |
+|---|---|
+| **Duplicate publishers** | Two nodes broadcasting one transform, with how far apart they are in metres. Silent and vicious: the pose flips depending on which message landed last. |
+| **Frames nothing provides** | A topic publishing in a frame no transform resolves — the static transform nobody launched. Invisible from `/tf` alone, because an absent transform has no rate to go missing. |
+| **Stamped into the future** | Transforms stamped ahead of their own publish time, which is what produces the extrapolation errors everyone recognises. |
+| **Intermittent completeness** | A chain that exists only 78% of the time. Every lookup in the gaps silently returns a stale pose — the fault that looks like flaky localisation and gets blamed on the sensor. |
+
+Frames nothing provides is found by peeking `header.stamp`'s neighbour: the `frame_id`
+that follows it in the header, read for the first 200 messages of each topic. It costs
+almost nothing and it is the only way to know a frame was *expected*.
+
+### The rendering is dependency-free
+
+No graphviz, no cairo. `.svg` and `.dot` are text; the `.pdf` is written by hand, because
+PDF's imaging model is a handful of operators and the base-14 fonts need no embedding. The
+whole page is about 2 KB. That matters because the machine that most needs this is a field
+laptop with nothing installed. The layout is a layered tree walk rather than a
+force-directed graph — TF *is* a tree, so the layout is both correct and stable between
+runs of the same robot.
+
+### Measured
+
+`tests/integration/test_transforms.py` is the harness.
+
+| | Result |
+|---|---|
+| Healthy tree, 5 seeds | **0 findings** |
+| Duplicate publisher | caught, reports ±0.35 m disagreement |
+| Frame nothing provides | caught, names the frame *and* the topic needing it |
+| Stamped 200 ms ahead | caught, reports the offset |
+| Intermittent chain | caught, reports 78% presence and the 7.0 s gap |
+| Decode cost | **+11.4%** on a real recording |
+
+`/tf` cannot use F1's fixed-offset peek — `tf2_msgs/TFMessage` is a bare sequence with no
+top-level header — so this is the one detector that pays for a real decode. It is opted
+into per topic and the cost above is measured, not assumed. It scales with how much of
+your traffic is TF: on `nuway_stops`, `/tf` is under 1% of messages.
+
+### Two false-positive classes found on real data
+
+Both were found by running against a real recording, and neither was visible in fixtures:
+
+- **A recording with no `/tf` at all** reported every sensor frame as orphaned. "Nothing
+  provides this frame" is only a claim you can make *against a tree*; with no tree it says
+  nothing except that TF was not recorded. Guarded.
+- **One TF outage became 29 findings.** When `/tf` stops, every later message is trivially
+  "newer than the transform tree", so each consumer topic reported its own extrapolation
+  risk. Extrapolation is now only judged while transforms are actually flowing, and it is
+  rolled into one finding rather than one per topic. The outage itself is the finding.
+
+There is also a distinction worth having: when `/tf_static` is *declared but empty*, the
+orphaned frames are reported as a likely **recording** fault rather than a robot fault.
+Static transforms are latched, so a recorder that subscribed late never saw them — and
+sending someone to fix the robot when the bag is at fault costs a day.
 
 ## The pre-flight gate: refuse to start a mission that is already broken
 
